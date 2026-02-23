@@ -1,0 +1,464 @@
+// ==UserScript==
+// @name         好货商品详情自动下载（主图/副图/参数JSON）
+// @namespace    http://tampermonkey.net/
+// @version      1.2.0
+// @description  不主动请求；解析页面自身返回的 promotion_h5 + detail_info，自动下载主图/副图/参数JSON到切片/pic 与 切片/json
+// @match        https://haohuo.jinritemai.com/ecommerce/trade/detail/index.html*
+// @connect      haohuo.jinritemai.com
+// @connect      ecombdimg.com
+// @connect      byteimg.com
+// @connect      douyinpic.com
+// @connect      *
+// @grant        GM_setClipboard
+// @grant        GM_download
+// @grant        GM_xmlhttpRequest
+// @grant        GM_registerMenuCommand
+// @run-at       document-start
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  const AUTO_DOWNLOAD = true;
+
+  // 下载相对路径（相对 Chrome 下载目录）
+  const PIC_DIR = '切片/pic/';   // 例如：~/Downloads/切片/pic/
+  const JSON_DIR = '切片/json/'; // 例如：~/Downloads/切片/json/
+
+  const BETWEEN_DOWNLOAD_MS = 800;
+  const MAX_IMAGES = 30;
+
+  // 去重（同一货号只下载一次）
+  const DOWNLOADED_KEY = '__hh_downloaded__';
+
+  // ========= 状态缓存：合并 promotion_h5(图片) + detail_info(货号/参数) =========
+  const S = {
+    wanted: null,      // { process, main_image, sub_images, process_json }
+    detailRoot: null,  // 含 detail_info 的 root
+    sku: '',
+    downloading: false,
+  };
+
+  // ========= 工具 =========
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  function safeJsonParse(txt) {
+    try { return JSON.parse(txt); } catch { return null; }
+  }
+
+  function extFromUrl(u) {
+    try {
+      const url = new URL(u);
+      const p = url.pathname || '';
+      const m = p.match(/\.(jpg|jpeg|png|webp|gif)$/i);
+      return m ? ('.' + m[1].toLowerCase()) : '.jpg';
+    } catch {
+      const m = String(u).match(/\.(jpg|jpeg|png|webp|gif)(\?|$)/i);
+      return m ? ('.' + m[1].toLowerCase()) : '.jpg';
+    }
+  }
+
+  function uniq(arr) {
+    return Array.from(new Set((arr || []).filter(Boolean)));
+  }
+
+  function pickCoverOrUrl(item) {
+    if (!item) return '';
+    return String(item.cover_url || item.url || '').trim();
+  }
+
+  function getPageId() {
+    try { return new URLSearchParams(location.search).get('id') || ''; } catch { return ''; }
+  }
+
+  // 只取 5~8 位“独立数字”（避免把长 id 当成货号）
+  function guessSkuFromText(t) {
+    const s = String(t || '');
+    const re = /(?<!\d)(\d{5,8})(?!\d)/g;
+    let m, last = '';
+    while ((m = re.exec(s))) last = m[1];
+    return last;
+  }
+
+  // ========= 货号提取 =========
+  // 1) detail_info.product_format[0].format 找 name=="货号" 取 message[0].desc
+  // 2) promotion_h5.basic_info_data.bottom_label_list[*].process 找 name=="货号" 取 value
+  // 3) title/doc 文本兜底（5~8位独立数字）
+  function extractSku(root) {
+    // 1) detail_info.product_format
+    const formats = root?.detail_info?.product_format?.[0]?.format;
+    if (Array.isArray(formats)) {
+      for (const f of formats) {
+        if (f?.name === '货号') {
+          const v = String(f?.message?.[0]?.desc || '').trim();
+          if (v) return v;
+        }
+      }
+    }
+
+    // 2) bottom_label_list[*].process
+    const bl = root?.promotion_h5?.basic_info_data?.bottom_label_list;
+    if (Array.isArray(bl)) {
+      for (const item of bl) {
+        const proc = item?.process;
+        if (!Array.isArray(proc)) continue;
+        const hit = proc.find(x => x?.name === '货号' && x?.value);
+        if (hit) return String(hit.value).trim();
+      }
+    }
+
+    // 3) title/doc 兜底
+    const titleFromJson = root?.promotion_h5?.basic_info_data?.title_info?.title || '';
+    let sku = guessSkuFromText(titleFromJson);
+    if (sku) return sku;
+
+    sku = guessSkuFromText(document.title || '');
+    if (sku) return sku;
+
+    // doc body 可能很大，控制一下长度
+    const bodyText = (document.body?.innerText || '').slice(0, 6000);
+    sku = guessSkuFromText(bodyText);
+    if (sku) return sku;
+
+    return '';
+  }
+
+  // ========= process 兜底：用 product_format 组装成 process =========
+  function buildProcessFromProductFormat(detailRoot) {
+    const formats = detailRoot?.detail_info?.product_format?.[0]?.format;
+    if (!Array.isArray(formats)) return [];
+    const out = [];
+    for (const f of formats) {
+      const name = f?.name;
+      if (!name) continue;
+      const msg = f?.message;
+      let value = '';
+      if (Array.isArray(msg) && msg.length) {
+        // 常见：message[0].desc
+        value = String(msg[0]?.desc || msg[0]?.text || '').trim();
+        // 如果是多项，拼一下
+        if (!value && msg.length > 1) value = msg.map(x => x?.desc || x?.text).filter(Boolean).join(',');
+      }
+      if (value) out.push({ name, value });
+    }
+    return out;
+  }
+
+  // ========= 你要的三项提取（更稳：从 bottom_label_list 里找任意一个带 process 的） =========
+  function extractWanted(root) {
+    const promo = root?.promotion_h5;
+    if (!promo) return null;
+
+    // process：不再死盯 [1]，而是找第一个有 process 的
+    let process = [];
+    const bl = promo?.basic_info_data?.bottom_label_list;
+    if (Array.isArray(bl)) {
+      for (const item of bl) {
+        if (Array.isArray(item?.process) && item.process.length) {
+          process = item.process;
+          break;
+        }
+      }
+    }
+
+    // 主图：media_list[0].content_list[0].cover_url（为空则 fallback）
+    const mainImage = pickCoverOrUrl(promo?.head_figure_data?.media_list?.[0]?.content_list?.[0]);
+
+    // 副图：优先 media_list[1].content_list[*].url
+    let subImages = [];
+    const ml = promo?.head_figure_data?.media_list ?? [];
+    if (ml?.[1]?.content_list?.length) {
+      subImages = ml[1].content_list.map(x => (x?.url || x?.cover_url || '')).filter(Boolean);
+    }
+    // 兜底：media_list[0] 的第 2 张起
+    if (!subImages.length && ml?.[0]?.content_list?.length > 1) {
+      subImages = ml[0].content_list.slice(1).map(x => pickCoverOrUrl(x)).filter(Boolean);
+    }
+
+    return {
+      process,
+      process_json: JSON.stringify(process || []),
+      main_image: mainImage,
+      sub_images: uniq(subImages).slice(0, MAX_IMAGES),
+    };
+  }
+
+  // ========= 去重 =========
+  function markDownloaded(sku) {
+    try {
+      const raw = localStorage.getItem(DOWNLOADED_KEY) || '{}';
+      const obj = JSON.parse(raw);
+      obj[sku] = Date.now();
+      localStorage.setItem(DOWNLOADED_KEY, JSON.stringify(obj));
+    } catch {}
+  }
+
+  function isDownloaded(sku) {
+    try {
+      const raw = localStorage.getItem(DOWNLOADED_KEY) || '{}';
+      const obj = JSON.parse(raw);
+      return !!obj[sku];
+    } catch {
+      return false;
+    }
+  }
+
+  function clearDownloaded(sku) {
+    try {
+      const raw = localStorage.getItem(DOWNLOADED_KEY) || '{}';
+      const obj = JSON.parse(raw);
+      delete obj[sku];
+      localStorage.setItem(DOWNLOADED_KEY, JSON.stringify(obj));
+    } catch {}
+  }
+
+  function clearAllDownloaded() {
+    try { localStorage.removeItem(DOWNLOADED_KEY); } catch {}
+  }
+
+  // ========= 下载（图片走 GM_xmlhttpRequest 拉 blob，再 GM_download 落盘） =========
+  function dl(url, name) {
+    return new Promise((resolve, reject) => {
+      const base = {
+        name,
+        saveAs: false,
+        conflictAction: 'overwrite',
+        onload: () => resolve(true),
+        onerror: (e) => reject(e),
+        ontimeout: () => reject(new Error('timeout')),
+      };
+
+      if (!/^https?:\/\//i.test(url)) {
+        GM_download({ url, ...base });
+        return;
+      }
+
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url,
+        responseType: 'blob',
+        headers: { Referer: location.href },
+        onload: (res) => {
+          if (res.status < 200 || res.status >= 300) {
+            console.warn('[DL_FAIL]', res.status, name, url);
+            reject(new Error('HTTP_' + res.status));
+            return;
+          }
+          const blobUrl = URL.createObjectURL(res.response);
+          GM_download({
+            url: blobUrl,
+            ...base,
+            onload: () => { URL.revokeObjectURL(blobUrl); resolve(true); },
+            onerror: (e) => { URL.revokeObjectURL(blobUrl); reject(e); },
+            ontimeout: () => { URL.revokeObjectURL(blobUrl); reject(new Error('timeout')); },
+          });
+        },
+        onerror: (e) => { console.warn('[DL_FAIL]', name, url, e); reject(e); },
+        ontimeout: () => reject(new Error('timeout')),
+      });
+    });
+  }
+
+  // ========= 合并后再下载（确保拿到 sku；process 缺失则用 product_format 组装） =========
+  async function maybeDownload() {
+    if (!AUTO_DOWNLOAD) return;
+    if (S.downloading) return;
+
+    // sku：优先已有；否则尝试从 detail/h5 再提取
+    let sku = S.sku || '';
+    if (!sku && S.detailRoot) sku = extractSku(S.detailRoot);
+    if (!sku && S.wanted) sku = extractSku({ promotion_h5: { basic_info_data: { title_info: { title: document.title } } } }); // 兜底
+    if (!sku) return;
+
+    // 必须有图片信息才下载图片；没有图片就至少下载 json
+    const wanted = S.wanted || { process: [], process_json: '[]', main_image: '', sub_images: [] };
+
+    // process 缺失：用 detail_info.product_format 组装一个
+    let process = Array.isArray(wanted.process) ? wanted.process : [];
+    if ((!process || !process.length) && S.detailRoot?.detail_info) {
+      process = buildProcessFromProductFormat(S.detailRoot);
+    }
+
+    // 去重
+    if (isDownloaded(sku)) return;
+
+    S.downloading = true;
+    try {
+      // 1) JSON：保存 sku + process + product_format
+      const paramJson = {
+        sku,
+        process,
+        product_format: S.detailRoot?.detail_info?.product_format ?? null,
+        page_id: getPageId(),
+      };
+      const jsonBlob = new Blob([JSON.stringify(paramJson, null, 2)], { type: 'application/json' });
+      const jsonUrl = URL.createObjectURL(jsonBlob);
+      try {
+        await dl(jsonUrl, `${JSON_DIR}${sku}.json`);
+      } finally {
+        URL.revokeObjectURL(jsonUrl);
+      }
+      await sleep(BETWEEN_DOWNLOAD_MS);
+
+      // 2) 主图：货号_00
+      if (wanted.main_image) {
+        const ext = extFromUrl(wanted.main_image);
+        await dl(wanted.main_image, `${PIC_DIR}${sku}_00${ext}`);
+        await sleep(BETWEEN_DOWNLOAD_MS);
+      }
+
+      // 3) 副图：货号_01/02...
+      let i = 1;
+      for (const u of (wanted.sub_images || [])) {
+        const ext = extFromUrl(u);
+        const idx = String(i).padStart(2, '0');
+        await dl(u, `${PIC_DIR}${sku}_${idx}${ext}`);
+        i++;
+        await sleep(BETWEEN_DOWNLOAD_MS);
+      }
+
+      markDownloaded(sku);
+    } finally {
+      S.downloading = false;
+    }
+  }
+
+  // ========= UI =========
+  function showPanel() {
+    const sku = S.sku || '';
+    const wanted = S.wanted || { process: [], main_image: '', sub_images: [] };
+
+    if (document.getElementById('__hh_dl_panel__')) {
+      const pre = document.getElementById('__hh_dl_pre__');
+      if (pre) pre.textContent = JSON.stringify({ sku, ...wanted }, null, 2);
+      return;
+    }
+
+    const box = document.createElement('div');
+    box.id = '__hh_dl_panel__';
+    box.style.cssText = [
+      'position:fixed','right:12px','bottom:12px','z-index:999999',
+      'width:360px','max-height:60vh','overflow:auto',
+      'background:#111','color:#fff',
+      'border:1px solid rgba(255,255,255,.15)',
+      'border-radius:12px','padding:10px',
+      'font-size:12px','line-height:1.4',
+      'box-shadow:0 6px 18px rgba(0,0,0,.35)'
+    ].join(';');
+
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-weight:700;">商品详情自动下载（多图+参数）</div>
+        <button id="__hh_close__" style="cursor:pointer;border:0;background:#333;color:#fff;border-radius:8px;padding:4px 8px;">关闭</button>
+      </div>
+      <div style="margin-top:8px;opacity:.85;">
+        下载目录基于 Chrome “下载位置”，脚本会写到：<b>${PIC_DIR}</b> 和 <b>${JSON_DIR}</b>
+      </div>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button id="__hh_copy_process__" style="cursor:pointer;border:0;background:#2b6;color:#fff;border-radius:8px;padding:6px 10px;">复制process JSON</button>
+        <button id="__hh_copy_main__" style="cursor:pointer;border:0;background:#36c;color:#fff;border-radius:8px;padding:6px 10px;">复制主图</button>
+        <button id="__hh_copy_sub__" style="cursor:pointer;border:0;background:#36c;color:#fff;border-radius:8px;padding:6px 10px;">复制副图JSON</button>
+      </div>
+      <pre id="__hh_dl_pre__" style="margin-top:8px;white-space:pre-wrap;word-break:break-all;background:#0b0b0b;border-radius:10px;padding:8px;border:1px solid rgba(255,255,255,.08);"></pre>
+    `;
+
+    const attach = () => (document.body ? document.body.appendChild(box) : setTimeout(attach, 200));
+    attach();
+
+    box.querySelector('#__hh_close__').onclick = () => box.remove();
+    box.querySelector('#__hh_copy_process__').onclick = () => GM_setClipboard(JSON.stringify((wanted.process || []), null, 2));
+    box.querySelector('#__hh_copy_main__').onclick = () => GM_setClipboard(wanted.main_image || '');
+    box.querySelector('#__hh_copy_sub__').onclick = () => GM_setClipboard(JSON.stringify(wanted.sub_images || [], null, 2));
+
+    const pre = box.querySelector('#__hh_dl_pre__');
+    pre.textContent = JSON.stringify({ sku, ...wanted }, null, 2);
+  }
+
+  // ========= 响应处理 =========
+  function handlePromotionH5(text) {
+    const root = safeJsonParse(text);
+    if (!root?.promotion_h5) return;
+
+    // 图片等信息
+    const wanted = extractWanted(root);
+    if (wanted) S.wanted = wanted;
+
+    // sku 尝试提取（可能为空）
+    const sku = extractSku(root);
+    if (sku) S.sku = sku;
+
+    showPanel();
+    maybeDownload().catch(() => {});
+  }
+
+  function handleDetailInfo(text) {
+    const root = safeJsonParse(text);
+    if (!root?.detail_info) return;
+
+    S.detailRoot = root;
+
+    const sku = extractSku(root);
+    if (sku) S.sku = sku;
+
+    showPanel();
+    maybeDownload().catch(() => {});
+  }
+
+  // ========= Hook XHR =========
+  const _open = XMLHttpRequest.prototype.open;
+  const _send = XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open = function (method, url) {
+    this.__hh_url__ = url;
+    return _open.apply(this, arguments);
+  };
+
+  XMLHttpRequest.prototype.send = function () {
+    this.addEventListener('load', function () {
+      const ct = (this.getResponseHeader('content-type') || '').toLowerCase();
+      if (!ct.includes('json')) return;
+
+      const txt = this.responseText;
+      if (!txt) return;
+
+      // promotion_h5：取图片
+      if (txt.includes('"promotion_h5"')) handlePromotionH5(txt);
+
+      // detail_info：取 product_format/货号/参数
+      if (txt.includes('"detail_info"') || txt.includes('"product_format"')) handleDetailInfo(txt);
+    });
+    return _send.apply(this, arguments);
+  };
+
+  // ========= Hook fetch =========
+  const _fetch = window.fetch;
+  window.fetch = async function () {
+    const resp = await _fetch.apply(this, arguments);
+    try {
+      const cloned = resp.clone();
+      const ct = (cloned.headers.get('content-type') || '').toLowerCase();
+      if (!ct.includes('json')) return resp;
+
+      const txt = await cloned.text();
+      if (!txt) return resp;
+
+      if (txt.includes('"promotion_h5"')) handlePromotionH5(txt);
+      if (txt.includes('"detail_info"') || txt.includes('"product_format"')) handleDetailInfo(txt);
+    } catch {}
+    return resp;
+  };
+
+  // ========= 菜单：清除去重 =========
+  GM_registerMenuCommand('清除当前货号去重（允许重新下载）', () => {
+    const sku = S.sku || '';
+    if (!sku) return alert('当前页面还没解析到货号');
+    clearDownloaded(sku);
+    alert(`已清除去重：${sku}\n刷新页面即可重新下载`);
+  });
+
+  GM_registerMenuCommand('清除全部去重（全部允许重新下载）', () => {
+    clearAllDownloaded();
+    alert('已清除全部去重记录');
+  });
+
+})();

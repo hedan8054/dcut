@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Data (runtime, not source)
+data/livecuts.db
+data/livecuts.db-wal
+data/livecuts.db-shm
+data/frames/
+data/sku_images/
+data/thumbnails/
+data/proxy/
+data/snapshots/
+
+# ML models
+*.pt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

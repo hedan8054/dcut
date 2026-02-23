@@ -1,0 +1,12 @@
+{
+  "node_id": "node_claude_code_ddmbp",
+  "claim_code": "",
+  "bundles": [
+    {
+      "gene_id": "sha256:4d133e5e402845c43437f41ca5e59ee3b228a3960cbc7fe1acb873b32b0fbe5f",
+      "capsule_id": "sha256:a230e1bec32c2eaec9c807860a8d8e5e77d81342141be0e08f9ee836bcef17b2",
+      "summary": "修复 Review 预览误报播放失败并固化排障技能",
+      "published_at": "2026-02-22T08:52:50.098534+00:00"
+    }
+  ]
+}

@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LiveCuts v1.2 系统流程图</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #0a0a0a; color: #e5e5e5;
+    padding: 40px 20px;
+    min-height: 100vh;
+  }
+  h1 { text-align: center; font-size: 24px; margin-bottom: 8px; color: #fff; }
+  .subtitle { text-align: center; color: #888; font-size: 14px; margin-bottom: 40px; }
+
+  .flow-container {
+    max-width: 1100px; margin: 0 auto;
+    display: flex; flex-direction: column; gap: 0;
+  }
+
+  /* ===== 阶段标题 ===== */
+  .phase {
+    display: flex; align-items: center; gap: 12px;
+    margin: 32px 0 16px; padding: 0 8px;
+  }
+  .phase-badge {
+    background: #333; color: #aaa; font-size: 11px; font-weight: 600;
+    padding: 3px 10px; border-radius: 10px; white-space: nowrap;
+    letter-spacing: 0.5px;
+  }
+  .phase-line { flex: 1; height: 1px; background: #333; }
+  .phase-label { color: #888; font-size: 13px; }
+
+  /* ===== 节点行 ===== */
+  .row {
+    display: flex; align-items: stretch; gap: 16px;
+    padding: 0 8px;
+  }
+  .row + .row { margin-top: 12px; }
+
+  /* ===== 箭头连接 ===== */
+  .arrow-down {
+    display: flex; justify-content: center; padding: 4px 0;
+  }
+  .arrow-down svg { width: 24px; height: 32px; }
+  .arrow-down path { stroke: #555; stroke-width: 2; fill: none; }
+  .arrow-down polygon { fill: #555; }
+
+  .arrow-right {
+    display: flex; align-items: center; padding: 0 2px;
+  }
+  .arrow-right svg { width: 32px; height: 24px; }
+  .arrow-right path { stroke: #555; stroke-width: 2; fill: none; }
+  .arrow-right polygon { fill: #555; }
+
+  /* ===== 节点卡片 ===== */
+  .node {
+    border: 1px solid #333; border-radius: 10px;
+    padding: 14px 18px; flex: 1;
+    position: relative; transition: all 0.2s;
+  }
+  .node:hover { border-color: #555; background: #1a1a1a; }
+  .node-title {
+    font-weight: 600; font-size: 14px; margin-bottom: 4px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .node-desc { font-size: 12px; color: #888; line-height: 1.6; }
+  .node-detail { font-size: 11px; color: #666; margin-top: 6px; line-height: 1.5; }
+  .node-page {
+    position: absolute; top: 8px; right: 10px;
+    font-size: 10px; color: #555; font-weight: 500;
+  }
+
+  /* 节点类型颜色 */
+  .node.input { border-color: #2563eb44; background: #2563eb08; }
+  .node.input .node-title { color: #60a5fa; }
+  .node.input:hover { border-color: #2563eb88; background: #2563eb12; }
+
+  .node.process { border-color: #8b5cf644; background: #8b5cf608; }
+  .node.process .node-title { color: #a78bfa; }
+  .node.process:hover { border-color: #8b5cf688; background: #8b5cf612; }
+
+  .node.store { border-color: #10b98144; background: #10b98108; }
+  .node.store .node-title { color: #34d399; }
+  .node.store:hover { border-color: #10b98188; background: #10b98112; }
+
+  .node.action { border-color: #f59e0b44; background: #f59e0b08; }
+  .node.action .node-title { color: #fbbf24; }
+  .node.action:hover { border-color: #f59e0b88; background: #f59e0b12; }
+
+  .node.output { border-color: #ef444444; background: #ef444408; }
+  .node.output .node-title { color: #f87171; }
+  .node.output:hover { border-color: #ef444488; background: #ef444412; }
+
+  .node.decision { border-color: #ec489944; background: #ec489908;
+    border-style: dashed; }
+  .node.decision .node-title { color: #f472b6; }
+
+  .node.external { border-color: #64748b44; background: #64748b08; }
+  .node.external .node-title { color: #94a3b8; }
+
+  /* 图标 */
+  .icon { font-size: 16px; }
+
+  /* 分支 */
+  .branch { display: flex; gap: 16px; }
+  .branch > .branch-item { flex: 1; display: flex; flex-direction: column; gap: 12px; }
+
+  /* 标注 */
+  .note {
+    font-size: 11px; color: #666; padding: 8px 12px;
+    border-left: 2px solid #444; margin: 8px 0 8px 40px;
+    line-height: 1.5;
+  }
+
+  /* 图例 */
+  .legend {
+    display: flex; gap: 20px; justify-content: center;
+    margin-top: 40px; padding: 16px; border-top: 1px solid #222;
+    flex-wrap: wrap;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #888; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+
+  /* 循环标记 */
+  .loop-label {
+    font-size: 10px; color: #f59e0b; background: #f59e0b15;
+    border: 1px dashed #f59e0b44; border-radius: 6px;
+    padding: 2px 8px; display: inline-block; margin: 4px 0 4px 40px;
+  }
+</style>
+</head>
+<body>
+
+<h1>LiveCuts v1.2 系统流程图</h1>
+<p class="subtitle">飞书表导入 → 结构化线索 → 选品 → 可视化粗找 + 精剪 → 真值复用</p>
+
+<div class="flow-container">
+
+  <!-- ========== Phase 1: 数据导入 ========== -->
+  <div class="phase">
+    <span class="phase-badge">PHASE 1</span>
+    <span class="phase-label">数据导入</span>
+    <div class="phase-line"></div>
+  </div>
+
+  <div class="row">
+    <div class="node external">
+      <div class="node-title"><span class="icon">📋</span> 飞书表 (xlsx)</div>
+      <div class="node-desc">主播每场直播后更新的商品+素材表</div>
+      <div class="node-detail">
+        列: 款号、品名、单价、素材(时间线索)、状态...<br>
+        素材列格式极乱: 全角/半角混用、换行/分号分隔
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">
+    <svg viewBox="0 0 24 32"><path d="M12 0 L12 24"/><polygon points="7,22 12,30 17,22"/></svg>
+  </div>
+
+  <div class="row">
+    <div class="node input">
+      <div class="node-title"><span class="icon">📤</span> 拖拽上传 xlsx</div>
+      <div class="node-desc">XlsxDropZone 组件，支持拖放或点击选择</div>
+      <div class="node-page">ImportPage</div>
+    </div>
+  </div>
+
+  <div class="arrow-down">
+    <svg viewBox="0 0 24 32"><path d="M12 0 L12 24"/><polygon points="7,22 12,30 17,22"/></svg>
+  </div>
+
+  <div class="row">
+    <div class="node process">
+      <div class="node-title"><span class="icon">⚙️</span> xlsx_parser.py 解析</div>
+      <div class="node-desc">移植自 v1.1 material-parser.ts</div>
+      <div class="node-detail">
+        1. 全角→半角，标准化分隔符<br>
+        2. 按 / 拆分为 fragments<br>
+        3. 每个 fragment 提取: 日期(X月X日)、时间点(HH:MM)、场次(第二场)、主播(XX老板)<br>
+        4. SHA1 去重 hash + 置信度(HIGH/MEDIUM/LOW)
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">
+    <svg viewBox="0 0 24 32"><path d="M12 0 L12 24"/><polygon points="7,22 12,30 17,22"/></svg>
+  </div>
+
+  <div class="row">
+    <div class="node process">
+      <div class="node-title"><span class="icon">🔄</span> diff_service.py 变更对比</div>
+      <div class="node-desc">对比新数据与数据库现有数据</div>
+      <div class="node-detail">
+        4 类变更: 新增SKU / 新增线索 / 状态变更 / 链接变更<br>
+        已存在的 lead (相同 hash) 自动跳过
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">
+    <svg viewBox="0 0 24 32"><path d="M12 0 L12 24"/><polygon points="7,22 12,30 17,22"/></svg>
+  </div>
+
+  <div class="row">
+    <div class="node store">
+      <div class="node-title"><span class="icon">💾</span> SQLite 存储</div>
+      <div class="node-desc">products 表 + leads 表 + xlsx_snapshots + import_diffs</div>
+      <div class="node-detail">
+        products: SKU 商品信息 (UPSERT)<br>
+        leads: 线索记录 (UNIQUE: sku_code + year + fragment_hash)<br>
+        xlsx_snapshots: 文件快照 (按 MD5 去重)<br>
+        import_diffs: 变更日志
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">
+    <svg viewBox="0 0 24 32"><path d="M12 0 L12 24"/><polygon points="7,22 12,30 17,22"/></svg>
+  </div>
+
+  <div class="row">
+    <div class="node input">
+      <div class="node-title"><span class="icon">📊</span> DiffPanel 展示变更</div>
+      <div class="node-desc">4 个 Tab 分类展示本次导入的变更明细</div>
+      <div class="node-page">ImportPage</div>
+    </div>
+  </div>
+
+  <div class="note">
+    用户在此确认导入结果是否正确。可反复导入不同版本的表格，系统自动增量合并。
+  </div>
+
+  <!-- ========== Phase 2: 选品计划 ========== -->
+  <div class="phase">
+    <span class="phase-badge">PHASE 2</span>
+    <span class="phase-label">选品计划</span>
+    <div class="phase-line"></div>
+  </div>
+
+  <div class="row">
+    <div class="node input" style="flex:1">
+      <div class="node-title"><span class="icon">🛍️</span> 左栏: 可选 SKU 列表</div>
+      <div class="node-desc">显示所有 SKU，可搜索筛选</div>
+      <div class="node-detail">
+        每个卡片: SKU图 + 款号 + 品名 + lead数<br>
+        点击 "+" 加入右栏
+      </div>
+      <div class="node-page">PlanPage</div>
+    </div>
+    <div class="arrow-right">
+      <svg viewBox="0 0 32 24"><path d="M0 12 L24 12"/><polygon points="22,7 30,12 22,17"/></svg>
+    </div>
+    <div class="node action" style="flex:1">
+      <div class="node-title"><span class="icon">📅</span> 右栏: 今日计划</div>
+      <div class="node-desc">已选 SKU 有序列表</div>
+      <div class="node-detail">
+        可拖拽排序<br>
+        状态切换: 待处理 → 进行中 → 已完成<br>
+        点击 × 移除
+      </div>
+      <div class="node-page">PlanPage</div>
+    </div>
+  </div>
+
+  <div class="note">
+    用户每天在此选定要切片的 SKU。计划按日期存储，可查看历史。
+  </div>
+
+  <!-- ========== Phase 3: 核心审核 ========== -->
+  <div class="phase">
+    <span class="phase-badge">PHASE 3</span>
+    <span class="phase-label">核心审核 — 粗找 + 精剪</span>
+    <div class="phase-line"></div>
+  </div>
+
+  <div class="row">
+    <div class="node input">
+      <div class="node-title"><span class="icon">🎯</span> 选择 SKU + Lead</div>
+      <div class="node-desc">左侧栏选中一个 SKU，再选一条 Lead 线索</div>
+      <div class="node-detail">
+        Lead 显示: 日期 + 时间点 + 置信度<br>
+        例: "1月4日 03:01, 03:15" (HIGH)
+      </div>
+      <div class="node-page">ReviewPage</div>
+    </div>
+  </div>
+
+  <div class="note">
+    用户还需要在顶部输入代理视频文件路径（后续可优化为自动匹配日期→视频文件）
+  </div>
+
+  <div class="arrow-down">
+    <svg viewBox="0 0 24 32"><path d="M12 0 L12 24"/><polygon points="7,22 12,30 17,22"/></svg>
+  </div>
+
+  <div class="row">
+    <div class="node process">
+      <div class="node-title"><span class="icon">📸</span> 批量抽帧 (ffmpeg)</div>
+      <div class="node-desc">从代理视频抽取帧画面</div>
+      <div class="node-detail">
+        使用 -ss 在 -i 前 (keyframe seek, ~50ms/帧)<br>
+        并发 semaphore=4，帧缓存到 data/frames/<br>
+        已存在的帧直接跳过
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">
+    <svg viewBox="0 0 24 32"><path d="M12 0 L12 24"/><polygon points="7,22 12,30 17,22"/></svg>
+  </div>
+
+  <!-- 三级 zoom -->
+  <div class="row">
+    <div class="node action">
+      <div class="node-title"><span class="icon">🔍</span> Level 1: ±15min 粗找</div>
+      <div class="node-desc">以线索时间点为中心，每 2min 抽 1 帧 ≈ 15 帧网格</div>
+      <div class="node-detail">帧网格展示，每帧带时间戳，hover 可放大</div>
+      <div class="node-page">CoarseGrid</div>
+    </div>
+  </div>
+
+  <div class="arrow-down">
+    <svg viewBox="0 0 24 32"><path d="M12 0 L12 24"/><polygon points="7,22 12,30 17,22"/></svg>
+  </div>
+
+  <div class="row">
+    <div class="node decision">
+      <div class="node-title"><span class="icon">❓</span> 在 ±15min 内找到目标了吗？</div>
+    </div>
+  </div>
+
+  <div class="branch" style="margin-top: 12px;">
+    <div class="branch-item">
+      <div style="text-align: center; font-size: 12px; color: #f472b6;">没找到 → 扩大范围</div>
+      <div class="node action">
+        <div class="node-title"><span class="icon">🔭</span> Level 1-wide: ±45min</div>
+        <div class="node-desc">每 5min 抽 1 帧 ≈ 18 帧</div>
+        <div class="node-detail">覆盖更大时间范围</div>
+      </div>
+    </div>
+    <div class="branch-item">
+      <div style="text-align: center; font-size: 12px; color: #34d399;">看到疑似帧 → 点击放大</div>
+      <div class="node action">
+        <div class="node-title"><span class="icon">🔬</span> Level 3: ±2min 精细</div>
+        <div class="node-desc">以点击帧为中心，每 10s 抽 1 帧 ≈ 24 帧</div>
+        <div class="node-detail">精确定位目标出现的时刻</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">
+    <svg viewBox="0 0 24 32"><path d="M12 0 L12 24"/><polygon points="7,22 12,30 17,22"/></svg>
+  </div>
+
+  <div style="text-align: center; font-size: 12px; color: #fbbf24; margin: 4px 0;">
+    在 Level 3 点击确认帧 → 进入精剪
+  </div>
+
+  <div class="arrow-down">
+    <svg viewBox="0 0 24 32"><path d="M12 0 L12 24"/><polygon points="7,22 12,30 17,22"/></svg>
+  </div>
+
+  <div class="row">
+    <div class="node action">
+      <div class="node-title"><span class="icon">✂️</span> 精剪 FineTrimmer</div>
+      <div class="node-desc">命中点前后 90s 的帧条带 + 视频预览播放器</div>
+      <div class="node-detail">
+        帧条带: 1帧/秒 ≈ 180帧 水平滚动<br>
+        绿色滑块=起点, 红色滑块=终点, 拖拽设置<br>
+        快捷键: [ 设起点, ] 设终点, 空格播放, ←→ ±1s<br>
+        时间显示: 02:15:30 - 02:18:45 (3m15s)
+      </div>
+      <div class="node-page">FineTrimmer</div>
+    </div>
+  </div>
+
+  <div class="arrow-down">
+    <svg viewBox="0 0 24 32"><path d="M12 0 L12 24"/><polygon points="7,22 12,30 17,22"/></svg>
+  </div>
+
+  <div class="row">
+    <div class="node input" style="flex: 1;">
+      <div class="node-title"><span class="icon">⭐</span> 评分 + 标签</div>
+      <div class="node-desc">1-5 星评分 + 预设标签</div>
+      <div class="node-detail">
+        标签: 远景 / 细节 / 试穿 / 讲得顺 / 情绪好 / 商品全屏
+      </div>
+    </div>
+    <div class="arrow-right">
+      <svg viewBox="0 0 32 24"><path d="M0 12 L24 12"/><polygon points="22,7 30,12 22,17"/></svg>
+    </div>
+    <div class="node store" style="flex: 1;">
+      <div class="node-title"><span class="icon">💾</span> 保存 verified_clips</div>
+      <div class="node-desc">真值片段入库</div>
+      <div class="node-detail">
+        记录: sku_code, video_path, start_sec, end_sec,<br>
+        rating, tags, lead 原始时间, 偏移量<br>
+        自动生成封面帧 (thumbnail)
+      </div>
+    </div>
+  </div>
+
+  <div class="loop-label">↩ 回到粗找，继续处理下一条 Lead 或下一个 SKU</div>
+
+  <!-- ========== Phase 4: 检索复用 ========== -->
+  <div class="phase">
+    <span class="phase-badge">PHASE 4</span>
+    <span class="phase-label">检索复用</span>
+    <div class="phase-line"></div>
+  </div>
+
+  <div class="branch">
+    <div class="branch-item">
+      <div class="node input">
+        <div class="node-title"><span class="icon">🔎</span> 按 SKU 检索</div>
+        <div class="node-desc">输入款号或品名搜索</div>
+        <div class="node-detail">
+          结果: 商品卡片 + Lead 时间线 + 真值片段列表<br>
+          真值按评分排序，可播放预览
+        </div>
+        <div class="node-page">SearchPage</div>
+      </div>
+    </div>
+    <div class="branch-item">
+      <div class="node input">
+        <div class="node-title"><span class="icon">📆</span> 按日期检索</div>
+        <div class="node-desc">选择日期查看当天所有 SKU</div>
+        <div class="node-detail">
+          结果: 当天 SKU 列表 + 每个 SKU 的时间点 + 真值统计<br>
+          可快速加入今日计划
+        </div>
+        <div class="node-page">SearchPage</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 数据流向总结 ========== -->
+  <div class="phase">
+    <span class="phase-badge">数据流</span>
+    <span class="phase-label">存储结构总览</span>
+    <div class="phase-line"></div>
+  </div>
+
+  <div class="row">
+    <div class="node store">
+      <div class="node-title"><span class="icon">🗄️</span> SQLite 数据库 (livecuts.db)</div>
+      <div class="node-detail" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
+        <div>
+          <strong style="color:#60a5fa">xlsx_snapshots</strong><br>
+          文件名, hash, 行数, 导入时间
+        </div>
+        <div>
+          <strong style="color:#60a5fa">products</strong><br>
+          SKU码, 品名, 价格, 状态, 图片...
+        </div>
+        <div>
+          <strong style="color:#60a5fa">leads</strong><br>
+          SKU码, 年月日, 时间点, 场次, 置信度
+        </div>
+        <div>
+          <strong style="color:#60a5fa">import_diffs</strong><br>
+          快照ID, 变更类型, 变更详情
+        </div>
+        <div>
+          <strong style="color:#f87171">verified_clips</strong><br>
+          SKU码, 视频路径, 起止时间, 评分, 标签
+        </div>
+        <div>
+          <strong style="color:#fbbf24">plans / plan_items</strong><br>
+          日期, SKU列表, 排序, 状态
+        </div>
+        <div>
+          <strong style="color:#94a3b8">video_meta</strong><br>
+          视频路径, 时长, 分辨率
+        </div>
+        <div>
+          <strong style="color:#94a3b8">frame_cache</strong><br>
+          视频路径, 时间戳, 帧图片路径
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top: 20px;">
+    <div class="row">
+      <div class="node external">
+        <div class="node-title"><span class="icon">📁</span> 文件系统</div>
+        <div class="node-detail" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
+          <div>
+            <strong style="color:#94a3b8">/Volumes/切片/衣甜/</strong><br>
+            NAS 原始视频 (成片用)
+          </div>
+          <div>
+            <strong style="color:#94a3b8">/Volumes/Lexar/切片/</strong><br>
+            本地代理视频 (浏览/抽帧用)
+          </div>
+          <div>
+            <strong style="color:#94a3b8">data/frames/</strong><br>
+            抽帧缓存 JPEG
+          </div>
+          <div>
+            <strong style="color:#94a3b8">data/sku_images/</strong><br>
+            SKU 商品图
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 图例 -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#60a5fa"></div> 用户输入/交互</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div> 后端处理</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#34d399"></div> 数据存储</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#fbbf24"></div> 核心操作</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f87171"></div> 输出结果</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f472b6; border-radius:50%"></div> 决策分支</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#94a3b8"></div> 外部资源</div>
+</div>
+
+</body>
+</html>

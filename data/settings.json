@@ -1,0 +1,9 @@
+{
+  "raw_video_root": "/Volumes/切片/衣甜",
+  "proxy_video_root": "/Volumes/切片/proxy",
+  "downloaded_pic_dir": "/Users/ddmbp/Downloads/切片/pic",
+  "frame_cache_dir": "data/frames",
+  "sku_image_dir": "data/sku_images",
+  "frame_semaphore_limit": 4,
+  "stream_chunk_size": 2097152
+}
