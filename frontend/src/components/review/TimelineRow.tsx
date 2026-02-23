@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { formatSec } from '@/lib/format'
-import type { FrameData } from '@/hooks/use-multi-res-frames'
+import { CompressionBag } from './CompressionBag'
+import type { DisplayItem } from './timeline-types'
 
 const FRAME_W = 36
 const FRAME_H = 64 // 9:16
@@ -9,7 +10,7 @@ const LABEL_W = 76
 
 interface Props {
   rowIndex: number
-  frames: FrameData[]
+  items: DisplayItem[]
   startSec: number
   endSec: number
   /** 选区范围 [start, end] 秒 — 如果与本行有重叠则渲染 overlay */
@@ -19,17 +20,27 @@ interface Props {
   /** 以图找图匹配到的时间戳集合 — 帧边框高亮 */
   clipHighlights?: Set<number>
   onFrameClick: (timestamp: number) => void
+  /** bag 需要的参数 */
+  onSelectionChange?: (range: [number, number]) => void
+  onDeferCompression?: () => void
+  onResumeCompression?: () => void
+  hitTimestamp?: number | null
 }
 
 /**
  * 单行时间轴: [label] [frame track] [end label]
  * frame track 下方有 12px 波形占位条
+ * 支持渲染 FrameItem 和 BagItem (压缩袋)
  */
 export function TimelineRow({
-  rowIndex, frames, startSec, endSec,
+  rowIndex, items, startSec, endSec,
   selectionRange, playheadSec,
   clipHighlights,
   onFrameClick,
+  onSelectionChange,
+  onDeferCompression,
+  onResumeCompression,
+  hitTimestamp,
 }: Props) {
   const rowDuration = endSec - startSec
 
@@ -63,11 +74,26 @@ export function TimelineRow({
       <div className="flex-1 min-w-0 relative">
         {/* 帧条 */}
         <div className="flex" style={{ height: FRAME_H }}>
-          {frames.map(frame => {
+          {items.map((item) => {
+            if (item.kind === 'bag') {
+              return (
+                <CompressionBag
+                  key={`bag-${item.startSec}`}
+                  bag={item}
+                  onSelectionChange={onSelectionChange ?? (() => {})}
+                  onDeferCompression={onDeferCompression}
+                  onResumeCompression={onResumeCompression}
+                  hitTimestamp={hitTimestamp}
+                />
+              )
+            }
+            // kind === 'frame'
+            const { frame } = item
             const isClipMatch = clipHighlights?.has(frame.timestamp)
             return (
               <div
                 key={frame.timestamp}
+                data-timestamp={frame.timestamp}
                 className={`shrink-0 cursor-pointer overflow-hidden transition-shadow ${
                   isClipMatch
                     ? 'ring-2 ring-cyan-400'
@@ -91,7 +117,7 @@ export function TimelineRow({
         {/* 波形占位条 */}
         <div className="bg-rv-waveform rounded-b" style={{ height: WAVEFORM_H }} />
 
-        {/* 选区 overlay */}
+        {/* 选区 overlay — bag 激活时由上层传 null 禁用 */}
         {selOverlay && (
           <div
             className="absolute top-0 pointer-events-none border-x-2 border-rv-accent"

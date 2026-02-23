@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useMemo } from 'react'
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useReviewStore } from '@/stores/reviewStore'
 import {
@@ -11,7 +11,6 @@ import { SessionTopBar } from '@/components/review/SessionTopBar'
 import { GlobalTimeline } from '@/components/review/GlobalTimeline'
 import { MultiRowTimeline, type ZoomLevel } from '@/components/review/MultiRowTimeline'
 import { AnnotationBar } from '@/components/review/AnnotationBar'
-import { SessionListPanel } from '@/components/review/SessionListPanel'
 import { NasScanPanel } from '@/components/review/NasScanPanel'
 import { useMultiResFrames } from '@/hooks/use-multi-res-frames'
 import { Badge } from '@/components/ui/badge'
@@ -38,7 +37,7 @@ const ZOOM_INTERVAL_SEC: Record<ZoomLevel, number> = {
   '1s': 1,
   '10s': 10,
   '60s': 60,
-  '90s': 90,
+  '2min': 120,
 }
 
 function parseLeadTimestamps(leads: Lead[]): number[] {
@@ -92,7 +91,7 @@ export default function ReviewPage() {
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('60s')
   const [coarseRange, setCoarseRange] = useState<TimeRange>([0, 0])
   const [focusRange, setFocusRange] = useState<TimeRange>([0, 0])
-  const [timelineCapacity, setTimelineCapacity] = useState(40)
+  const [, setTimelineCapacity] = useState(40)
 
   const videoPath = useMemo(() => {
     if (!videoInfo) return ''
@@ -101,17 +100,11 @@ export default function ReviewPage() {
   const videoId = videoInfo?.id
   const videoDuration = videoInfo?.duration_sec || 4 * 3600
   const leadTimestamps = useMemo(() => parseLeadTimestamps(sessionLeads), [sessionLeads])
+  // 1s 模式只显示聚焦范围，其余模式始终显示全视频（可滚动）
   const activeRange: TimeRange = useMemo(() => {
     if (zoomLevel === '1s') return focusRange
-    if (zoomLevel === '60s' || zoomLevel === '90s') return [0, videoDuration]
-    const interval = ZOOM_INTERVAL_SEC[zoomLevel]
-    const fullNeed = Math.floor(videoDuration / interval) + 1
-    const capacity = Math.max(1, timelineCapacity)
-    if (fullNeed <= capacity) return [0, videoDuration]
-    const span = Math.max(interval, interval * capacity)
-    const center = rangeCenter(coarseRange)
-    return makeCenteredRange(center, span, videoDuration)
-  }, [coarseRange, focusRange, timelineCapacity, videoDuration, zoomLevel])
+    return [0, videoDuration]
+  }, [focusRange, videoDuration, zoomLevel])
 
   const framesHook = useMultiResFrames(videoDuration)
   const {
@@ -124,13 +117,17 @@ export default function ReviewPage() {
     progress: frameProgress,
     version: frameVersion,
   } = framesHook
+  const zoomInterval = ZOOM_INTERVAL_SEC[zoomLevel]
+  // 1s zoom 下用 coarseRange 读 L2，让压缩袋之外的帧也可见
+  const l2ReadRange: TimeRange = zoomLevel === '1s' ? coarseRange : activeRange
   const l2Frames = useMemo(
-    () => getFrames('L2', activeRange[0], activeRange[1]),
-    [getFrames, activeRange, frameVersion],
+    () => getFrames('L2', l2ReadRange[0], l2ReadRange[1], zoomLevel !== '1s' ? zoomInterval : undefined),
+    [getFrames, l2ReadRange, frameVersion, zoomLevel, zoomInterval],
   )
+  // L3 也用 coarseRange 读取，配合渐进式加载覆盖更大范围
   const l3Frames = useMemo(
-    () => getFrames('L3', focusRange[0], focusRange[1]),
-    [getFrames, focusRange, frameVersion],
+    () => getFrames('L3', coarseRange[0], coarseRange[1]),
+    [getFrames, coarseRange, frameVersion],
   )
 
   useEffect(() => {
@@ -139,8 +136,9 @@ export default function ReviewPage() {
 
   useEffect(() => {
     if (!videoPath || zoomLevel === '1s') return
-    extendRange(videoPath, videoId, 'L2', activeRange[0], activeRange[1])
-  }, [activeRange, extendRange, videoId, videoPath, zoomLevel])
+    // 按当前 zoom 级别的间隔加载帧，避免 60s 视图按 10s 间隔抽帧浪费
+    extendRange(videoPath, videoId, 'L2', activeRange[0], activeRange[1], zoomInterval)
+  }, [activeRange, extendRange, videoId, videoPath, zoomLevel, zoomInterval])
 
   useEffect(() => {
     fetchTodayPlan()
@@ -181,7 +179,8 @@ export default function ReviewPage() {
     if (video) {
       const vPath = video.proxy_path || video.raw_path
       startPreload(vPath, anchor, video.id)
-      extendRange(vPath, video.id, 'L2', coarse[0], coarse[1])
+      // 初始 zoom 是 60s，按 60s 间隔加载
+      extendRange(vPath, video.id, 'L2', coarse[0], coarse[1], ZOOM_INTERVAL_SEC['60s'])
     }
     setClipResults([])
   }, [
@@ -195,6 +194,10 @@ export default function ReviewPage() {
     startPreload,
     setVideoInfo,
   ])
+
+  // 用 ref 持有 selectSession 最新引用，避免 useEffect 因其变化重复触发
+  const selectSessionRef = useRef(selectSession)
+  selectSessionRef.current = selectSession
 
   useEffect(() => {
     if (!currentSkuCode) {
@@ -214,13 +217,12 @@ export default function ReviewPage() {
         setSessions(data.sessions)
         const withVideo = data.sessions.find(s => s.video !== null)
         const first = withVideo ?? data.sessions[0]
-        if (first) selectSession(first)
+        if (first) selectSessionRef.current(first)
       })
       .catch(console.error)
       .finally(() => setSessionsLoading(false))
   }, [
     currentSkuCode,
-    selectSession,
     setCurrentSession,
     setSavedClips,
     setSessions,
@@ -267,7 +269,7 @@ export default function ReviewPage() {
     setFocusRange(nextFocus)
 
     if (videoPath) {
-      extendRange(videoPath, videoId, 'L2', nextCoarse[0], nextCoarse[1])
+      extendRange(videoPath, videoId, 'L2', nextCoarse[0], nextCoarse[1], zoomInterval)
       if (zoomLevel === '1s') {
         extendRange(videoPath, videoId, 'L2', nextFocus[0], nextFocus[1])
         loadL3(videoPath, rangeCenter(nextFocus), videoId)
@@ -283,31 +285,34 @@ export default function ReviewPage() {
     videoId,
     videoPath,
     zoomLevel,
+    zoomInterval,
   ])
 
   const handleCoarseRangeChange = useCallback((range: TimeRange) => {
     const nextCoarse = clampRange(range, videoDuration, FOCUS_MIN_SPAN_SEC)
     setCoarseRange(nextCoarse)
     setFocusRange(prev => clampFocusIntoCoarse(prev, nextCoarse, videoDuration, FOCUS_MIN_SPAN_SEC))
-    if (videoPath) extendRange(videoPath, videoId, 'L2', nextCoarse[0], nextCoarse[1])
-  }, [videoDuration, videoPath, videoId, extendRange])
+    if (videoPath) extendRange(videoPath, videoId, 'L2', nextCoarse[0], nextCoarse[1], zoomInterval)
+  }, [videoDuration, videoPath, videoId, extendRange, zoomInterval])
 
   const handleFocusRangeChange = useCallback((range: TimeRange) => {
     const nextFocus = clampFocusIntoCoarse(range, coarseRange, videoDuration, FOCUS_MIN_SPAN_SEC)
     setFocusRange(nextFocus)
     if (!videoPath) return
-    extendRange(videoPath, videoId, 'L2', nextFocus[0], nextFocus[1])
+    extendRange(videoPath, videoId, 'L2', nextFocus[0], nextFocus[1], zoomInterval)
     if (zoomLevel === '1s') loadL3(videoPath, rangeCenter(nextFocus), videoId)
-  }, [coarseRange, videoDuration, videoPath, videoId, extendRange, loadL3, zoomLevel])
+  }, [coarseRange, videoDuration, videoPath, videoId, extendRange, loadL3, zoomLevel, zoomInterval])
 
   const handleZoomChange = useCallback((zoom: ZoomLevel) => {
     setZoomLevel(zoom)
     if (!videoPath) return
+    // 切换 zoom 时按新的间隔补帧
+    const newInterval = ZOOM_INTERVAL_SEC[zoom]
+    extendRange(videoPath, videoId, 'L2', activeRange[0], activeRange[1], newInterval)
     if (zoom === '1s') {
-      extendRange(videoPath, videoId, 'L2', focusRange[0], focusRange[1])
       loadL3(videoPath, rangeCenter(focusRange), videoId)
     }
-  }, [videoPath, videoId, extendRange, loadL3, focusRange])
+  }, [videoPath, videoId, extendRange, loadL3, focusRange, activeRange])
 
   const handleRequestL3 = useCallback((centerSec: number) => {
     if (videoPath) loadL3(videoPath, centerSec, videoId)
@@ -334,13 +339,21 @@ export default function ReviewPage() {
     }
   }, [videoInfo, skuImages])
 
-  /** 点帧 → 直接进入标注模式（Escape 可取消） */
+  const handleSelectionRangeChange = useCallback((range: [number, number]) => {
+    setSelectionStart(range[0])
+    setSelectionEnd(range[1])
+  }, [])
+
+  /** 点帧 → 切 1s zoom + L3 加载 + 进入标注模式 */
   const handleFrameSelect = useCallback((timestamp: number) => {
     setHitTimestamp(timestamp)
     setSelectionStart(Math.max(0, timestamp - 5))
     setSelectionEnd(Math.min(videoDuration, timestamp + 5))
     setMode('annotate')
-  }, [setHitTimestamp, setMode, videoDuration])
+    // 自动切到 1s 精查 + 触发 L3 加载
+    if (zoomLevel !== '1s') setZoomLevel('1s')
+    if (videoPath) loadL3(videoPath, timestamp, videoId)
+  }, [setHitTimestamp, setMode, videoDuration, zoomLevel, videoPath, videoId, loadL3])
 
   const handleVideoInfoUpdate = useCallback((nextVideo: VideoRegistry) => {
     setVideoInfo(nextVideo)
@@ -393,7 +406,7 @@ export default function ReviewPage() {
         setCoarseRange(nextCoarse)
         setFocusRange(nextFocus)
         setZoomLevel('60s')
-        if (videoPath) extendRange(videoPath, videoId, 'L2', nextCoarse[0], nextCoarse[1])
+        if (videoPath) extendRange(videoPath, videoId, 'L2', nextCoarse[0], nextCoarse[1], ZOOM_INTERVAL_SEC['60s'])
       }
     }
     setMode('browse')
@@ -458,8 +471,10 @@ export default function ReviewPage() {
         <SessionTopBar
           currentSession={currentSession}
           videoInfo={videoInfo}
+          sessions={sessions}
           mode={mode}
           onModeChange={setMode}
+          onSelectSession={handleSelectSessionFromTopBar}
         />
 
         {currentSkuCode && (
@@ -587,14 +602,8 @@ export default function ReviewPage() {
                   clipTimestamps={clipResults.length > 0 ? clipResults.map(r => r.timestamp) : undefined}
                   selectionRange={mode === 'annotate' ? [selectionStart, selectionEnd] : null}
                   playheadSec={mode === 'annotate' ? hitTimestamp : null}
-                />
-              )}
-
-              {sessions.length > 0 && (
-                <SessionListPanel
-                  sessions={sessions}
-                  currentSession={currentSession}
-                  onSelectSession={handleSelectSessionFromTopBar}
+                  onSelectionRangeChange={handleSelectionRangeChange}
+                  hitTimestamp={hitTimestamp}
                 />
               )}
 

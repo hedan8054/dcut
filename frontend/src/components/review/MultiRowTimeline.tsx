@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Monitor, Loader2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { TimelineRow } from './TimelineRow'
@@ -6,14 +6,16 @@ import { FocusRangeSlider } from './FocusRangeSlider'
 import { formatSec } from '@/lib/format'
 import type { FrameData } from '@/hooks/use-multi-res-frames'
 import type { TimeRange } from '@/lib/timeline-range'
+import { BAG_THRESHOLD } from './timeline-types'
+import type { DisplayItem, FrameItem, BagItem } from './timeline-types'
 
-export type ZoomLevel = '1s' | '10s' | '60s' | '90s'
-const ZOOM_ORDER: ZoomLevel[] = ['90s', '60s', '10s', '1s']
+export type ZoomLevel = '1s' | '10s' | '60s' | '2min'
+const ZOOM_ORDER: ZoomLevel[] = ['2min', '60s', '10s', '1s']
 const ZOOM_INTERVAL_SEC: Record<ZoomLevel, number> = {
   '1s': 1,
   '10s': 10,
   '60s': 60,
-  '90s': 90,
+  '2min': 120,
 }
 
 const FRAME_W = 36
@@ -44,6 +46,90 @@ interface Props {
   clipTimestamps?: number[]
   selectionRange?: [number, number] | null
   playheadSec?: number | null
+  onSelectionRangeChange?: (range: [number, number]) => void
+  hitTimestamp?: number | null
+}
+
+/**
+ * 将帧列表 + 选区转为 DisplayItem[]
+ * 选区内帧数 > BAG_THRESHOLD → 用 l2Frames 降采样替换为动态宽度 BagItem
+ * sampledFrames: 高一档间隔的帧（如 10s 间隔的 l2Frames）
+ */
+function buildDisplayItems(
+  frames: FrameData[],
+  selectionRange: [number, number] | null,
+  sampledFrames: FrameData[],
+): DisplayItem[] {
+  if (!selectionRange || frames.length === 0) {
+    return frames.map(f => ({ kind: 'frame', frame: f } as FrameItem))
+  }
+
+  const [selS, selE] = selectionRange
+  const before: FrameItem[] = []
+  const inside: FrameData[] = []
+  const after: FrameItem[] = []
+
+  for (const f of frames) {
+    if (f.timestamp < selS) {
+      before.push({ kind: 'frame', frame: f })
+    } else if (f.timestamp >= selS && f.timestamp <= selE) {
+      inside.push(f)
+    } else {
+      after.push({ kind: 'frame', frame: f })
+    }
+  }
+
+  // 不满足阈值 → 不压缩，用原 overlay
+  if (inside.length <= BAG_THRESHOLD) {
+    return frames.map(f => ({ kind: 'frame', frame: f } as FrameItem))
+  }
+
+  // 从高一档帧中筛选落在选区内的采样帧
+  const sampled = sampledFrames.filter(f => f.timestamp >= selS && f.timestamp <= selE)
+
+  // 没有可用采样帧 → 不压缩（避免空袋）
+  if (sampled.length < 1) {
+    return frames.map(f => ({ kind: 'frame', frame: f } as FrameItem))
+  }
+
+  const bag: BagItem = {
+    kind: 'bag',
+    sampledFrames: sampled,
+    frameCount: inside.length,
+    startSec: selS,
+    endSec: selE,
+    slots: sampled.length,
+  }
+
+  return [...before, bag, ...after]
+}
+
+/**
+ * 将 DisplayItem[] 按 framesPerRow 上限分行
+ * bag 计 BAG_SLOTS slots，frame 计 1 slot
+ */
+function splitIntoRows(items: DisplayItem[], framesPerRow: number): DisplayItem[][] {
+  const rows: DisplayItem[][] = []
+  let currentRow: DisplayItem[] = []
+  let slotsUsed = 0
+
+  for (const item of items) {
+    const itemSlots = item.kind === 'bag' ? item.slots : 1
+    // 如果加入后超出行宽，先换行（但空行必须接受）
+    if (slotsUsed > 0 && slotsUsed + itemSlots > framesPerRow) {
+      rows.push(currentRow)
+      currentRow = []
+      slotsUsed = 0
+    }
+    currentRow.push(item)
+    slotsUsed += itemSlots
+  }
+
+  if (currentRow.length > 0) {
+    rows.push(currentRow)
+  }
+
+  return rows
 }
 
 export function MultiRowTimeline({
@@ -59,11 +145,20 @@ export function MultiRowTimeline({
   clipTimestamps,
   selectionRange = null,
   playheadSec = null,
+  onSelectionRangeChange,
+  hitTimestamp = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [framesPerRow, setFramesPerRow] = useState(20)
-  const [maxRows, setMaxRows] = useState(6)
   const activeRange: TimeRange = zoomLevel === '1s' ? focusRange : displayRange
+
+  // ── 鼠标按下展开 / 松开压缩 ──
+  // mousedown bag 手柄 → true → 帧展开 + overlay + elementFromPoint
+  // mouseup → false → 立即压缩为 bag
+  const [compressionDeferred, setCompressionDeferred] = useState(false)
+
+  const handleDeferCompression = useCallback(() => setCompressionDeferred(true), [])
+  const handleResumeCompression = useCallback(() => setCompressionDeferred(false), [])
 
   useEffect(() => {
     const el = containerRef.current
@@ -78,8 +173,6 @@ export function MultiRowTimeline({
       const rowH = FRAME_H + WAVEFORM_H + ROW_GAP
       const availableH = Math.max(100, window.innerHeight - rect.top - BOTTOM_RESERVED)
       const rows = Math.max(1, Math.floor((availableH + ROW_GAP) / rowH))
-      setMaxRows(rows)
-
       onViewportCapacityChange?.(cols * rows)
     }
 
@@ -103,26 +196,53 @@ export function MultiRowTimeline({
     })
   }, [l2Frames, zoomLevel])
 
-  const frames = zoomLevel === '1s' ? (l3Frames.length > 0 ? l3Frames : l2Frames) : l2FramesByZoom
+  // 1s zoom: l3 精细区（1s 间隔）+ l2 扩展区（10s 间隔），让选区之后的帧可见
+  const frames = useMemo(() => {
+    if (zoomLevel !== '1s') return l2FramesByZoom
+    if (l3Frames.length === 0) return l2Frames
+
+    const l3Start = l3Frames[0].timestamp
+    const l3End = l3Frames[l3Frames.length - 1].timestamp
+
+    // l3 覆盖区域外补 l2 帧
+    const l2Before = l2Frames.filter(f => f.timestamp < l3Start)
+    const l2After = l2Frames.filter(f => f.timestamp > l3End)
+
+    return [...l2Before, ...l3Frames, ...l2After]
+  }, [zoomLevel, l3Frames, l2Frames, l2FramesByZoom])
   const loading = zoomLevel === '1s' ? (l3Loading || l2Loading) : l2Loading
   const prog = zoomLevel === '1s' ? (l3Loading ? l3Progress : l2Progress) : l2Progress
+  const interval = ZOOM_INTERVAL_SEC[zoomLevel]
 
   const clipSet = useMemo(() => {
     if (!clipTimestamps?.length) return new Set<number>()
-    const interval = ZOOM_INTERVAL_SEC[zoomLevel]
     return new Set(clipTimestamps.map(t => Math.round(t / interval) * interval))
-  }, [clipTimestamps, zoomLevel])
+  }, [clipTimestamps, interval])
 
-  const rows = useMemo(() => {
-    const result: FrameData[][] = []
-    for (let i = 0; i < frames.length; i += framesPerRow) {
-      result.push(frames.slice(i, i + framesPerRow))
-    }
-    return result
-  }, [frames, framesPerRow])
+  // 构建 DisplayItem[]
+  // compressionDeferred=true → 全部帧（不压缩，overlay 可见）
+  // compressionDeferred=false → buildDisplayItems（可能生成 bag）
+  const displayItems = useMemo(
+    () => compressionDeferred
+      ? frames.map(f => ({ kind: 'frame', frame: f } as FrameItem))
+      : buildDisplayItems(
+          frames,
+          zoomLevel === '1s' ? selectionRange : null,
+          l2Frames,
+        ),
+    [frames, selectionRange, l2Frames, zoomLevel, compressionDeferred],
+  )
+
+  // bag 是否激活（决定 overlay 是否禁用）
+  const bagActive = useMemo(
+    () => displayItems.some(item => item.kind === 'bag'),
+    [displayItems],
+  )
+
+  // 按 framesPerRow 分行
   const visibleRows = useMemo(
-    () => (zoomLevel === '1s' ? rows : rows.slice(0, maxRows)),
-    [maxRows, rows, zoomLevel],
+    () => splitIntoRows(displayItems, framesPerRow),
+    [displayItems, framesPerRow],
   )
 
   useEffect(() => {
@@ -182,10 +302,10 @@ export function MultiRowTimeline({
             60秒
           </button>
           <button
-            className={`px-2 py-0.5 transition-colors ${zoomLevel === '90s' ? 'bg-rv-accent text-black font-medium' : 'text-muted-foreground'}`}
-            onClick={() => handleZoomToggle('90s')}
+            className={`px-2 py-0.5 transition-colors ${zoomLevel === '2min' ? 'bg-rv-accent text-black font-medium' : 'text-muted-foreground'}`}
+            onClick={() => handleZoomToggle('2min')}
           >
-            90秒
+            2分
           </button>
         </div>
 
@@ -203,6 +323,7 @@ export function MultiRowTimeline({
         </span>
       </div>
 
+      {/* 1s 模式下用内联压缩袋替代 FocusRangeSlider selection mode */}
       {zoomLevel !== '1s' && (
         <FocusRangeSlider
           coarseRange={coarseRange}
@@ -241,21 +362,27 @@ export function MultiRowTimeline({
         </div>
       ) : (
         <div className="space-y-2">
-          {visibleRows.map((rowFrames, i) => {
-            const rowStart = rowFrames[0]?.timestamp ?? 0
-            const interval = ZOOM_INTERVAL_SEC[zoomLevel]
-            const rowEnd = (rowFrames[rowFrames.length - 1]?.timestamp ?? 0) + interval
+          {visibleRows.map((rowItems, i) => {
+            // 从 items 中提取首帧和尾帧时间戳用于标签
+            const firstTs = getFirstTimestamp(rowItems)
+            const lastTs = getLastTimestamp(rowItems)
+            const rowStart = firstTs ?? 0
+            const rowEnd = (lastTs ?? 0) + interval
             return (
               <TimelineRow
                 key={`${rowStart}-${i}`}
                 rowIndex={i}
-                frames={rowFrames}
+                items={rowItems}
                 startSec={rowStart}
                 endSec={rowEnd}
-                selectionRange={selectionRange}
+                selectionRange={bagActive ? null : selectionRange}
                 playheadSec={playheadSec}
                 clipHighlights={clipSet.size > 0 ? clipSet : undefined}
                 onFrameClick={onFrameSelect}
+                onSelectionChange={onSelectionRangeChange}
+                onDeferCompression={handleDeferCompression}
+                onResumeCompression={handleResumeCompression}
+                hitTimestamp={hitTimestamp}
               />
             )
           })}
@@ -263,8 +390,27 @@ export function MultiRowTimeline({
       )}
 
       <p className="text-[11px] text-muted-foreground">
-        先在粗档位(10s/60s/90s)定位范围，再切 1 秒精查；入点/出点仍在下方标注栏独立调整
+        先在粗档位(10s/60s/2min)定位范围，再切 1 秒精查；选区 &gt; 3 帧后自动压缩为绿色袋，拖绿手柄调整入点/出点
       </p>
     </div>
   )
+}
+
+/** 从一行 DisplayItem 中提取最早的时间戳 */
+function getFirstTimestamp(items: DisplayItem[]): number | null {
+  for (const item of items) {
+    if (item.kind === 'frame') return item.frame.timestamp
+    if (item.kind === 'bag') return item.startSec
+  }
+  return null
+}
+
+/** 从一行 DisplayItem 中提取最晚的时间戳 */
+function getLastTimestamp(items: DisplayItem[]): number | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]
+    if (item.kind === 'frame') return item.frame.timestamp
+    if (item.kind === 'bag') return item.endSec
+  }
+  return null
 }

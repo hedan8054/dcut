@@ -109,7 +109,7 @@ export function useMultiResFrames(videoDuration: number) {
   const [version, setVersion] = useState(0)
   const bump = useCallback(() => setVersion(v => v + 1), [])
 
-  /** 内部：加载指定层级指定范围的帧 */
+  /** 内部：加载指定层级指定范围的帧，intervalOverride 可覆盖默认间隔 */
   const loadRange = useCallback(async (
     videoPath: string,
     videoId: number | undefined,
@@ -117,9 +117,11 @@ export function useMultiResFrames(videoDuration: number) {
     start: number,
     end: number,
     sid: number,
+    intervalOverride?: number,
   ) => {
     const config = LAYER_CONFIG[layer]
-    const allTs = generateTimestamps(start, end, config.interval, videoDuration)
+    const interval = intervalOverride ?? config.interval
+    const allTs = generateTimestamps(start, end, interval, videoDuration)
     if (allTs.length === 0) return
 
     const cache = cacheRef.current[layer]
@@ -180,34 +182,65 @@ export function useMultiResFrames(videoDuration: number) {
   }, [videoDuration, bump])
 
   /**
-   * 启动预加载 — 场次选择时调用
-   * 默认仅预加载 L2（锚点 ±10min），避免全局首屏被 L1 拖慢
+   * 渐进式预加载 — 场次选择时调用
+   *
+   * 加载顺序（保证最优体感）：
+   * 1) 全视频 120s 间隔 → 页面秒开，几秒内有帧可看
+   * 2) 全视频 60s 间隔 → 补 60s 间隙帧
+   * 3) 锚点 ±10min 10s 间隔 → 用户最可能浏览的区域
+   * 4) 锚点 ±2min 1s 间隔 → 精细预览
+   *
+   * 每步用 await 串行，后步的帧复用前步缓存（cache.has 跳过）
+   * session 变化时 sid 不匹配，自动中止
    */
   const startPreload = useCallback((videoPath: string, anchorSec: number, videoId?: number) => {
     const sid = ++sessionRef.current
 
-    // 用户马上需要看到的是局部 L2
-    loadRange(videoPath, videoId, 'L2', anchorSec - 10 * 60, anchorSec + 10 * 60, sid)
-  }, [loadRange])
+    ;(async () => {
+      // 渐进式预加载，所有间隔都是 10 的倍数，保证嵌套对齐
+      // 1. 全视频 120s — 最快出图（~125帧 for 250min video）
+      await loadRange(videoPath, videoId, 'L2', 0, videoDuration, sid, 120)
+      if (sessionRef.current !== sid) return
 
-  /** 按需加载 L3（局部 1s 放大），用户 zoom 到 1s 时调用 */
+      // 2. 全视频 60s — 补中间帧（~125帧增量）
+      await loadRange(videoPath, videoId, 'L2', 0, videoDuration, sid, 60)
+      if (sessionRef.current !== sid) return
+
+      // 3. 锚点附近 ±10min 10s — 用户最可能浏览的区域
+      await loadRange(videoPath, videoId, 'L2', anchorSec - 10 * 60, anchorSec + 10 * 60, sid, 10)
+      if (sessionRef.current !== sid) return
+
+      // 4. 锚点附近 ±2min 1s — 精细层
+      await loadRange(videoPath, videoId, 'L3', anchorSec - 2 * 60, anchorSec + 2 * 60, sid)
+    })()
+  }, [loadRange, videoDuration])
+
+  /** 按需加载 L3（局部 1s 放大），渐进式扩展：±2min → ±4min → ±6min → ±8min */
   const loadL3 = useCallback((videoPath: string, centerSec: number, videoId?: number) => {
     const sid = sessionRef.current
-    const halfRange = 2 * 60 // ±2min
-    loadRange(videoPath, videoId, 'L3', centerSec - halfRange, centerSec + halfRange, sid)
+    const steps = [2, 4, 6, 8] // 每步的半径（分钟）
+
+    ;(async () => {
+      for (const mins of steps) {
+        if (sessionRef.current !== sid) return
+        const half = mins * 60
+        await loadRange(videoPath, videoId, 'L3', centerSec - half, centerSec + half, sid)
+      }
+    })()
   }, [loadRange])
 
-  /** 获取指定层级指定范围内的帧 */
+  /** 获取指定层级指定范围内的帧，intervalOverride 可覆盖默认步进 */
   const getFrames = useCallback((
-    layer: ResLayer, startSec: number, endSec: number,
+    layer: ResLayer, startSec: number, endSec: number, intervalOverride?: number,
   ): FrameData[] => {
     const config = LAYER_CONFIG[layer]
+    const interval = intervalOverride ?? config.interval
     const cache = cacheRef.current[layer]
     const frames: FrameData[] = []
 
-    const s = Math.max(0, Math.ceil(startSec / config.interval) * config.interval)
+    const s = Math.max(0, Math.ceil(startSec / interval) * interval)
     const e = Math.min(videoDuration, endSec)
-    for (let t = s; t <= e; t += config.interval) {
+    for (let t = s; t <= e; t += interval) {
       const ts = Math.round(t * 10) / 10
       const url = cache.get(ts)
       if (url) frames.push({ timestamp: ts, url })
@@ -215,32 +248,33 @@ export function useMultiResFrames(videoDuration: number) {
     return frames
   }, [videoDuration])
 
-  /** 平移时增量加载 */
+  /** 平移时增量加载，intervalOverride 可覆盖默认间隔 */
   const extendRange = useCallback((
     videoPath: string,
     videoId: number | undefined,
     layer: ResLayer,
     newStart: number,
     newEnd: number,
+    intervalOverride?: number,
   ) => {
     const sid = sessionRef.current
     const existing = rangeRef.current[layer]
 
     if (!existing) {
-      loadRange(videoPath, videoId, layer, newStart, newEnd, sid)
+      loadRange(videoPath, videoId, layer, newStart, newEnd, sid, intervalOverride)
       return
     }
 
     const [es, ee] = existing
-    // 新窗口与已加载窗口完全不相交时，只补当前窗口，避免跨小时“补桥”导致长时间空白
+    // 新窗口与已加载窗口完全不相交时，只补当前窗口，避免跨小时”补桥”导致长时间空白
     if (newEnd < es || newStart > ee) {
       rangeRef.current[layer] = null
-      loadRange(videoPath, videoId, layer, newStart, newEnd, sid)
+      loadRange(videoPath, videoId, layer, newStart, newEnd, sid, intervalOverride)
       return
     }
 
-    if (newStart < es) loadRange(videoPath, videoId, layer, newStart, es, sid)
-    if (newEnd > ee) loadRange(videoPath, videoId, layer, ee, newEnd, sid)
+    if (newStart < es) loadRange(videoPath, videoId, layer, newStart, es, sid, intervalOverride)
+    if (newEnd > ee) loadRange(videoPath, videoId, layer, ee, newEnd, sid, intervalOverride)
   }, [loadRange])
 
   /** 重置缓存（切换 lead / 切换场次） */
