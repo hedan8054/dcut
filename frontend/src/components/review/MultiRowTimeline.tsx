@@ -16,10 +16,10 @@ const WAVEFORM_H = 12
 const LABEL_W = 76
 const ROW_GAP = 8
 const BOTTOM_RESERVED = 170
-const CLICK_THRESHOLD_PX = 5
 const MIN_SPAN_SEC = 2
 const AUTO_SCROLL_EDGE_PX = 24
 const AUTO_SCROLL_MAX_PX = 18
+const DRAG_THRESHOLD_PX = 6
 
 export type ZoomLevel = '1s' | '10s' | '60s' | '2min'
 
@@ -168,6 +168,7 @@ export function MultiRowTimeline({
   const frameMapRef = useRef<Map<number, FramePoint>>(new Map())
   const sortedTimestampsRef = useRef<number[]>([])
   const scrollParentRef = useRef<HTMLElement | null>(null)
+  const pendingCreateCleanupRef = useRef<(() => void) | null>(null)
 
   const [framesPerRow, setFramesPerRow] = useState(20)
   const [layoutVersion, setLayoutVersion] = useState(0)
@@ -625,7 +626,7 @@ export function MultiRowTimeline({
       const dx = Math.abs(clientX - ds.startX)
       const dy = Math.abs(clientY - ds.startY)
 
-      if (dx < CLICK_THRESHOLD_PX && dy < CLICK_THRESHOLD_PX) {
+      if (dx < DRAG_THRESHOLD_PX && dy < DRAG_THRESHOLD_PX) { // 安全网：延迟拖拽已在上游拦截点击，这里是 fallback
         const nearest = findNearestFrame(clientX, clientY)
         if (nearest) onFrameSelect(nearest.timestamp)
         setRubberBand(null)
@@ -651,10 +652,11 @@ export function MultiRowTimeline({
         .map(fp => fp.timestamp)
 
       if (selected.length >= 2) {
-        onCreateCapsule({
-          start_sec: Math.min(...selected),
-          end_sec: Math.max(...selected),
-        })
+        const startSec = Math.min(...selected)
+        const endSec = Math.max(...selected)
+        if (endSec - startSec >= 2) { // Minimum threshold to create capsule
+          onCreateCapsule({ start_sec: startSec, end_sec: endSec })
+        }
       }
 
       setRubberBand(null)
@@ -699,6 +701,11 @@ export function MultiRowTimeline({
       grid.removeEventListener('dragstart', onDragStart, true)
     }
   }, [pushDiagEvent])
+
+  // 清理延迟拖拽的临时监听器
+  useEffect(() => {
+    return () => { pendingCreateCleanupRef.current?.() }
+  }, [])
 
   useDragInteraction({
     dragging,
@@ -793,8 +800,39 @@ export function MultiRowTimeline({
     if (!target.closest('[data-timestamp], [data-timeline-track]')) return
 
     e.preventDefault()
-    startCreateDrag(e.clientX, e.clientY)
-  }, [startCreateDrag])
+
+    // 延迟拖拽：mousedown 只记录位置，移动超阈值才启动拖拽
+    const startX = e.clientX
+    const startY = e.clientY
+
+    const cleanup = () => {
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', onUp)
+      document.removeEventListener('pointercancel', onCancel)
+      pendingCreateCleanupRef.current = null
+    }
+
+    const onMove = (me: PointerEvent) => {
+      if (Math.hypot(me.clientX - startX, me.clientY - startY) > DRAG_THRESHOLD_PX) {
+        cleanup()
+        startCreateDrag(startX, startY)
+      }
+    }
+
+    const onUp = (ue: PointerEvent) => {
+      cleanup()
+      // 纯点击 → 选中最近帧
+      const nearest = findNearestFrame(ue.clientX, ue.clientY)
+      if (nearest) onFrameSelect(nearest.timestamp)
+    }
+
+    const onCancel = () => { cleanup() }
+
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp)
+    document.addEventListener('pointercancel', onCancel)
+    pendingCreateCleanupRef.current = cleanup
+  }, [findNearestFrame, onFrameSelect, startCreateDrag])
 
   const handleCapsulePointerDown = useCallback((
     e: React.PointerEvent<HTMLDivElement>,
@@ -896,11 +934,10 @@ export function MultiRowTimeline({
                       data-row-index={rowIdx}
                       data-col-index={frame.colIndex}
                       data-compressed={frame.compressed ? '1' : '0'}
-                      className={`shrink-0 cursor-pointer overflow-hidden transition-shadow ${
-                        frame.compressed
-                          ? 'ring-1 ring-emerald-400/35'
-                          : 'hover:ring-1 hover:ring-rv-accent/50'
-                      }`}
+                      className={`shrink-0 cursor-pointer overflow-hidden transition-shadow ${frame.compressed
+                        ? 'ring-1 ring-emerald-400/35'
+                        : 'hover:ring-1 hover:ring-rv-accent/50'
+                        }`}
                       style={{ width: frame.width, height: FRAME_H }}
                       draggable={false}
                       title={formatSec(frame.timestamp)}
@@ -936,11 +973,10 @@ export function MultiRowTimeline({
                 {geo.segments.map((seg) => (
                   <div
                     key={`capsule-${geo.capsule.id}-row-${seg.row}`}
-                    className={`absolute rounded-md border transition-colors ${
-                      isActive
-                        ? 'border-emerald-300 shadow-[0_0_0_1px_rgba(16,185,129,0.65)]'
-                        : 'border-cyan-300/45'
-                    }`}
+                    className={`absolute rounded-md border transition-colors ${isActive
+                      ? 'border-emerald-300 shadow-[0_0_0_1px_rgba(16,185,129,0.65)]'
+                      : 'border-cyan-300/45'
+                      }`}
                     data-capsule-segment
                     data-capsule-id={geo.capsule.id}
                     data-capsule-active={isActive ? '1' : '0'}
@@ -957,11 +993,10 @@ export function MultiRowTimeline({
                     <div
                       data-capsule-body
                       data-capsule-id={geo.capsule.id}
-                      className={`absolute inset-0 pointer-events-auto overflow-hidden ${
-                        isActive
-                          ? 'cursor-grab active:cursor-grabbing'
-                          : 'cursor-pointer'
-                      }`}
+                      className={`absolute inset-0 pointer-events-auto overflow-hidden ${isActive
+                        ? 'cursor-grab active:cursor-grabbing'
+                        : 'cursor-pointer'
+                        }`}
                       onPointerDown={(e) => handleCapsulePointerDown(e, 'move', geo.capsule)}
                       title={`${formatSec(geo.startTs)} - ${formatSec(geo.endTs)}`}
                     >
@@ -972,17 +1007,17 @@ export function MultiRowTimeline({
                             const ratioPos = segSpan <= 0 ? 0 : (sample.timestamp - seg.startTs) / segSpan
                             const clamped = Math.max(0, Math.min(1, ratioPos))
                             return (
-                            <div
-                              key={`sample-${geo.capsule.id}-${seg.row}-${sample.timestamp}`}
-                              className="absolute top-[4%] h-[92%] rounded-sm border border-white/15 bg-cover bg-center"
-                              style={{
-                                width: thumbW,
-                                left: `calc(${(clamped * 100).toFixed(4)}% - ${thumbW / 2}px)`,
-                                zIndex: idx + 1,
-                                backgroundImage: `url("${sample.url}")`,
-                                opacity: isActive ? 0.94 : 0.78,
-                              }}
-                            />
+                              <div
+                                key={`sample-${geo.capsule.id}-${seg.row}-${sample.timestamp}`}
+                                className="absolute top-[4%] h-[92%] rounded-sm border border-white/15 bg-cover bg-center"
+                                style={{
+                                  width: thumbW,
+                                  left: `calc(${(clamped * 100).toFixed(4)}% - ${thumbW / 2}px)`,
+                                  zIndex: idx + 1,
+                                  backgroundImage: `url("${sample.url}")`,
+                                  opacity: isActive ? 0.94 : 0.78,
+                                }}
+                              />
                             )
                           })
                         ) : (
@@ -1014,10 +1049,10 @@ export function MultiRowTimeline({
                         data-capsule-handle
                         data-capsule-id={geo.capsule.id}
                         data-side="left"
-                        className="absolute left-0 top-0 bottom-0 w-[12px] pointer-events-auto cursor-ew-resize bg-emerald-500/90 hover:bg-emerald-300 text-black text-[10px] flex items-center justify-center font-bold shadow-[0_0_0_1px_rgba(16,185,129,0.8)]"
+                        className="absolute left-[-6px] top-0 bottom-0 w-[18px] pointer-events-auto cursor-ew-resize flex items-center justify-center z-[100]"
                         onPointerDown={(e) => handleCapsulePointerDown(e, 'resize-start', geo.capsule)}
                       >
-                        【
+                        <div className="h-full w-[4px] bg-emerald-500/90 shadow-[0_0_0_1px_rgba(16,185,129,0.8)] hover:bg-emerald-300" />
                         {dragTimeHint && dragTimeHint.capsuleId === geo.capsule.id && dragTimeHint.mode === 'resize-start' && (
                           <span
                             data-capsule-drag-info
@@ -1034,10 +1069,10 @@ export function MultiRowTimeline({
                         data-capsule-handle
                         data-capsule-id={geo.capsule.id}
                         data-side="right"
-                        className="absolute right-0 top-0 bottom-0 w-[12px] pointer-events-auto cursor-ew-resize bg-emerald-500/90 hover:bg-emerald-300 text-black text-[10px] flex items-center justify-center font-bold shadow-[0_0_0_1px_rgba(16,185,129,0.8)]"
+                        className="absolute right-[-6px] top-0 bottom-0 w-[18px] pointer-events-auto cursor-ew-resize flex items-center justify-center z-[100]"
                         onPointerDown={(e) => handleCapsulePointerDown(e, 'resize-end', geo.capsule)}
                       >
-                        】
+                        <div className="h-full w-[4px] bg-emerald-500/90 shadow-[0_0_0_1px_rgba(16,185,129,0.8)] hover:bg-emerald-300" />
                         {dragTimeHint && dragTimeHint.capsuleId === geo.capsule.id && dragTimeHint.mode === 'resize-end' && (
                           <span
                             data-capsule-drag-info
