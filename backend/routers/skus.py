@@ -197,8 +197,8 @@ async def browser_batch_download(body: BrowserBatchBody):
                         "open", "-a", "Google Chrome", item["promo_link"],
                     ])
                 logger.info(f"打开浏览器: {item['sku_code']} → {item['promo_link']}")
-            except Exception as e:
-                logger.warning(f"打开失败: {item['sku_code']} — {e}")
+            except (OSError, subprocess.SubprocessError) as exc:
+                logger.warning(f"打开失败: {item['sku_code']} — {exc}")
             await asyncio.sleep(5)
 
     asyncio.create_task(_open_tabs())
@@ -423,7 +423,7 @@ async def delete_sku_image(sku_code: str, image_id: int):
     # 尝试删除文件
     try:
         (DATA_DIR / row["file_path"]).unlink(missing_ok=True)
-    except Exception:
+    except OSError:
         pass
 
     return {"ok": True}

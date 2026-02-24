@@ -25,10 +25,12 @@ async def extract_frame(
     timestamp_sec: float,
     width: int = 180,
     height: int = 320,
+    video_id: int | None = None,
 ) -> str:
-    """抽取单帧，返回帧图片路径（有缓存则直接返回）"""
+    """抽取单帧，返回帧图片路径（有缓存则直接返回）
+    video_id 存在时用 video_id 做 cache key，保证 raw/proxy 共享缓存"""
     FRAME_DIR.mkdir(parents=True, exist_ok=True)
-    vh = _video_hash(video_path)
+    vh = f"v{video_id}" if video_id is not None else _video_hash(video_path)
     frame_name = f"{vh}_{timestamp_sec:.1f}_{width}x{height}.jpg"
     frame_path = FRAME_DIR / frame_name
 
@@ -63,8 +65,10 @@ async def extract_frames_batch(
     timestamps: list[float],
     width: int = 180,
     height: int = 320,
+    video_id: int | None = None,
 ) -> list[dict]:
-    """批量抽帧，返回 [{timestamp, path}]"""
+    """批量抽帧，返回 [{timestamp, path}]
+    video_id 透传给 extract_frame，保证 raw/proxy 共享缓存"""
     if not timestamps:
         return []
 
@@ -77,7 +81,7 @@ async def extract_frames_batch(
     for i in range(0, len(unique_ts), _REQUEST_CHUNK):
         chunk = unique_ts[i:i + _REQUEST_CHUNK]
         paths = await asyncio.gather(
-            *(extract_frame(video_path, t, width, height) for t in chunk),
+            *(extract_frame(video_path, t, width, height, video_id) for t in chunk),
             return_exceptions=True,
         )
         for t, p in zip(chunk, paths):

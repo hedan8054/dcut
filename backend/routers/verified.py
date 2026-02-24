@@ -1,5 +1,6 @@
 """Verified Clips 真值路由"""
 import json
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -10,6 +11,7 @@ from backend.models import VerifiedClipIn, VerifiedClipPatch
 from backend.services.ffmpeg_service import generate_thumbnail
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("")
@@ -24,8 +26,8 @@ async def create_verified(body: VerifiedClipIn):
         abs_path = await generate_thumbnail(body.video_path, mid_time)
         if abs_path:
             thumbnail = str(Path(abs_path).relative_to(DATA_DIR))
-    except Exception:
-        pass
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+        logger.warning("生成真值缩略图失败: path=%s err=%s", body.video_path, exc)
 
     tags_json = json.dumps(body.tags, ensure_ascii=False)
 

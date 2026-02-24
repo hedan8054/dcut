@@ -10,8 +10,11 @@
 - 素材按年份分列: 2026/2025/2024 各自独立解析
 """
 import hashlib
+import logging
 import re
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 SESSION_LABELS = ['第二场', '大号', '小号']
 HOST_LABELS = ['施老板']
@@ -236,7 +239,7 @@ def extract_product_id(promo_link: str, fallback: str) -> str:
             if re.match(r'^\d{8,}$', pid):
                 return pid
         except Exception:
-            pass
+            logger.debug("extract_product_id: URL 解析失败 link=%s", link)
 
     # fallback: 处理科学计数法
     raw = str(fallback or '').strip()

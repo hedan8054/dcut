@@ -1,7 +1,7 @@
 import type {
   Snapshot, ImportDiff, Product, Lead, CalendarEntry,
   VerifiedClip, Plan, VideoMeta, SkuSearchResult, DateSearchResult,
-  VideoRegistry, SkuImage, EnrichedPlan, SkuSessions,
+  VideoRegistry, SkuImage, EnrichedPlan, SkuSessions, ReviewCapsule,
 } from '@/types'
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -136,6 +136,72 @@ export function deleteVerified(id: number) {
   return request<void>(`/api/verified/${id}`, { method: 'DELETE' })
 }
 
+// ---- Review Capsules ----
+
+export function fetchReviewCapsules(videoId?: number, videoPath = '') {
+  const params = new URLSearchParams()
+  if (typeof videoId === 'number') params.set('video_id', String(videoId))
+  else if (videoPath) params.set('video_path', videoPath)
+  const qs = params.toString()
+  return request<ReviewCapsule[]>(`/api/review-capsules${qs ? `?${qs}` : ''}`)
+}
+
+export function createReviewCapsule(data: {
+  video_id?: number
+  video_path: string
+  start_sec: number
+  end_sec: number
+  display_mode?: 'compressed'
+  compression_ratio?: number
+  sample_interval_sec?: number
+  sku_code?: string | null
+  sku_label?: string | null
+  rating?: number
+  tags?: string[]
+  notes?: string
+  z_index?: number
+  status?: 'draft' | 'bound' | 'final'
+}) {
+  return request<ReviewCapsule>('/api/review-capsules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export function patchReviewCapsule(id: number, data: {
+  start_sec?: number
+  end_sec?: number
+  display_mode?: 'compressed'
+  compression_ratio?: number
+  sample_interval_sec?: number
+  sku_code?: string | null
+  sku_label?: string | null
+  rating?: number
+  tags?: string[]
+  notes?: string
+  z_index?: number
+  status?: 'draft' | 'bound' | 'final'
+}) {
+  return request<ReviewCapsule>(`/api/review-capsules/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteReviewCapsule(id: number) {
+  return request<void>(`/api/review-capsules/${id}`, { method: 'DELETE' })
+}
+
+export function reorderReviewCapsuleZ(orders: { id: number; z_index: number }[]) {
+  return request<ReviewCapsule[]>('/api/review-capsules/reorder-z', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ orders }),
+  })
+}
+
 // ---- 计划 ----
 
 export function fetchTodayPlan() {
@@ -153,6 +219,10 @@ export function createPlan(date?: string) {
 export function fetchPlans(date = '') {
   const params = date ? `?date=${date}` : ''
   return request<Plan[]>(`/api/plans${params}`)
+}
+
+export function fetchAllPlansEnriched() {
+  return request<EnrichedPlan[]>('/api/plans?enriched=true')
 }
 
 export function addPlanItems(planId: number, skuCodes: string[]) {

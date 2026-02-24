@@ -1,98 +1,145 @@
-import { useState, useCallback, useEffect } from 'react'
-import { Star, Save, Loader2, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronDown, ChevronUp, Loader2, Save, Star, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { formatSec, formatDuration } from '@/lib/format'
+import type { ReviewCapsule } from '@/types'
 
 const PRESET_TAGS = ['远景', '细节', '试穿', '讲得顺', '情绪好', '商品全屏']
 
 interface Props {
-  hitTimestamp: number
-  startSec: number
-  endSec: number
-  onStartChange: (sec: number) => void
-  onEndChange: (sec: number) => void
-  onSave: (data: {
-    start_sec: number
-    end_sec: number
-    rating: number
-    tags: string[]
+  capsule: ReviewCapsule
+  currentSkuCode?: string
+  onPatch: (patch: {
+    sku_code?: string | null
+    sku_label?: string | null
+    rating?: number
+    tags?: string[]
+    notes?: string
+    status?: 'draft' | 'bound' | 'final'
   }) => Promise<void>
-  onCancel: () => void
+  onDelete: () => Promise<void>
+  onClose: () => void
 }
 
-/**
- * 紧凑标注栏: 显示在时间轴下方
- * 起止时间 + 评分 + 标签 + 保存/取消
- */
-export function AnnotationBar({
-  hitTimestamp, startSec, endSec,
-  onStartChange, onEndChange,
-  onSave, onCancel,
-}: Props) {
-  const [rating, setRating] = useState(0)
+export function AnnotationBar({ capsule, currentSkuCode, onPatch, onDelete, onClose }: Props) {
+  const [skuCode, setSkuCode] = useState(capsule.sku_code ?? '')
+  const [skuLabel, setSkuLabel] = useState(capsule.sku_label ?? '')
+  const [rating, setRating] = useState(capsule.rating)
   const [tags, setTags] = useState<string[]>([])
+  const [notes, setNotes] = useState(capsule.notes)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    setSkuCode(capsule.sku_code ?? currentSkuCode ?? '')
+    setSkuLabel(capsule.sku_label ?? '')
+    setRating(capsule.rating)
+    setNotes(capsule.notes)
+    setDetailsOpen(false)
+    try {
+      const parsed = JSON.parse(capsule.tags_json)
+      setTags(Array.isArray(parsed) ? parsed.map(String) : [])
+    } catch {
+      setTags([])
+    }
+  }, [capsule, currentSkuCode])
 
   const toggleTag = useCallback((tag: string) => {
     setTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])
   }, [])
 
+  const effectiveSkuCode = useMemo(() => {
+    return skuCode.trim() || currentSkuCode?.trim() || ''
+  }, [currentSkuCode, skuCode])
+
+  const status = useMemo(() => {
+    if (effectiveSkuCode) return 'bound' as const
+    return 'draft' as const
+  }, [effectiveSkuCode])
+
   const handleSave = useCallback(async () => {
-    if (endSec <= startSec) return
     setSaving(true)
     try {
-      await onSave({ start_sec: startSec, end_sec: endSec, rating, tags })
-      // 保存成功后重置
-      setRating(0)
-      setTags([])
+      await onPatch({
+        sku_code: effectiveSkuCode || null,
+        sku_label: skuLabel.trim() || null,
+        rating,
+        tags,
+        notes,
+        status,
+      })
     } finally {
       setSaving(false)
     }
-  }, [startSec, endSec, rating, tags, onSave])
+  }, [effectiveSkuCode, notes, onPatch, rating, skuLabel, status, tags])
 
-  // 键盘快捷键: [ 设起点, ] 设终点, ←→ ±1s, Enter 保存, Esc 取消
+  const handleDelete = useCallback(async () => {
+    setDeleting(true)
+    try {
+      await onDelete()
+    } finally {
+      setDeleting(false)
+    }
+  }, [onDelete])
+
+  // debounced 自动保存: 评分或标签变化后 800ms 自动保存
+  const autoSaveTimerRef = useRef<number | null>(null)
+  const initialSyncRef = useRef(true)
+
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      if (e.key === '[') {
-        e.preventDefault()
-        onStartChange(hitTimestamp)
-      } else if (e.key === ']') {
-        e.preventDefault()
-        onEndChange(hitTimestamp)
-      } else if (e.key === 'ArrowLeft') {
-        e.preventDefault()
-        onStartChange(startSec - 1)
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault()
-        onEndChange(endSec + 1)
-      } else if (e.key === 'Enter' && !saving && endSec > startSec) {
-        e.preventDefault()
-        handleSave()
-      } else if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
+    // 跳过首次同步（capsule 切换时 useEffect 设置初始值）
+    if (initialSyncRef.current) {
+      initialSyncRef.current = false
+      return
+    }
+
+    if (autoSaveTimerRef.current != null) {
+      window.clearTimeout(autoSaveTimerRef.current)
+    }
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null
+      void onPatch({
+        sku_code: effectiveSkuCode || null,
+        sku_label: skuLabel.trim() || null,
+        rating,
+        tags,
+        notes,
+        status,
+      })
+    }, 800)
+
+    return () => {
+      if (autoSaveTimerRef.current != null) {
+        window.clearTimeout(autoSaveTimerRef.current)
       }
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [hitTimestamp, startSec, endSec, onStartChange, onEndChange, saving, handleSave, onCancel])
+  }, [rating, tags]) // eslint-disable-line react-hooks/exhaustive-deps -- 仅在评分/标签变化时自动保存
+
+  // capsule 切换时重置 initialSync flag
+  useEffect(() => {
+    initialSyncRef.current = true
+  }, [capsule.id])
 
   return (
-    <div className="border-t border-rv-border bg-rv-surface px-4 py-3 space-y-2">
-      {/* 第一行: 时间范围 + 评分 + 操作 */}
-      <div className="flex items-center gap-4 flex-wrap">
+    <div className="border-t border-rv-border bg-rv-surface px-4 py-3 space-y-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs font-mono">
-          <span className="text-rv-accent">{formatSec(startSec)}</span>
+          <span className="text-rv-accent">{formatSec(capsule.start_sec)}</span>
           {' - '}
-          <span className="text-rv-accent">{formatSec(endSec)}</span>
+          <span className="text-rv-accent">{formatSec(capsule.end_sec)}</span>
           <span className="text-muted-foreground ml-1">
-            ({formatDuration(endSec - startSec)})
+            ({formatDuration(capsule.end_sec - capsule.start_sec)})
           </span>
         </span>
 
-        {/* 评分 */}
+        <Badge variant="outline" className="text-[11px]">capsule #{capsule.id}</Badge>
+        <Badge className="text-[11px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+          {effectiveSkuCode ? `已绑定 SKU: ${effectiveSkuCode}` : 'SKU 未绑定'}
+        </Badge>
+
         <div className="flex items-center gap-1">
           <span className="text-xs text-muted-foreground">评分:</span>
           <div className="flex gap-0.5">
@@ -105,22 +152,26 @@ export function AnnotationBar({
         </div>
 
         <div className="flex-1" />
-
-        <span className="text-[11px] text-muted-foreground">
-          [ 起点 ] 终点 ←→ ±1s Enter 保存 Esc 取消
-        </span>
-
-        <Button size="sm" onClick={handleSave} disabled={saving || endSec <= startSec}>
-          {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-          保存片段
+        <span className="text-[11px] text-muted-foreground">Delete / Backspace 删除当前胶囊</span>
+        <Button variant="ghost" size="sm" onClick={() => setDetailsOpen(v => !v)} disabled={saving || deleting}>
+          {detailsOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          {detailsOpen ? '收起详情' : '展开详情'}
         </Button>
-        <Button variant="ghost" size="sm" onClick={onCancel}>
+
+        <Button size="sm" onClick={handleSave} disabled={saving || deleting}>
+          {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+          保存胶囊
+        </Button>
+        <Button variant="outline" size="sm" onClick={handleDelete} disabled={saving || deleting}>
+          {deleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+          删除
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onClose} disabled={saving || deleting}>
           <X className="w-3 h-3" />
-          取消
+          关闭
         </Button>
       </div>
 
-      {/* 第二行: 标签 */}
       <div className="flex items-center gap-1.5 flex-wrap">
         <span className="text-xs text-muted-foreground">标签:</span>
         {PRESET_TAGS.map(tag => (
@@ -134,6 +185,37 @@ export function AnnotationBar({
           </Badge>
         ))}
       </div>
+
+      {detailsOpen && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div>
+              <label className="text-[11px] text-muted-foreground">SKU 编码（可空）</label>
+              <Input value={skuCode} onChange={(e) => setSkuCode(e.target.value)} placeholder="例如 511181" className="h-8 text-xs font-mono" />
+            </div>
+            <div>
+              <label className="text-[11px] text-muted-foreground">SKU 标签（可空）</label>
+              <Input value={skuLabel} onChange={(e) => setSkuLabel(e.target.value)} placeholder="例如 TT-VEGETABLES" className="h-8 text-xs" />
+            </div>
+            <div>
+              <label className="text-[11px] text-muted-foreground">状态</label>
+              <div className="h-8 flex items-center px-2 rounded border border-rv-border text-xs font-mono">
+                {status}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[11px] text-muted-foreground">备注</label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="w-full mt-1 min-h-16 rounded border border-rv-border bg-background px-2 py-1 text-xs"
+              placeholder="补充说明，可选"
+            />
+          </div>
+        </>
+      )}
     </div>
   )
 }

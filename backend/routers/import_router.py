@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+import sqlite3
 import uuid
 from datetime import datetime
 from io import BytesIO
@@ -158,7 +159,7 @@ async def upload_xlsx(file: UploadFile = File(...), force: bool = False):
                     json.dumps(frag.time_points), frag.parse_confidence,
                 ))
                 lead_inserted += 1
-            except Exception:
+            except sqlite3.IntegrityError:
                 pass  # UNIQUE 冲突跳过
 
     await db.commit()

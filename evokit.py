@@ -93,7 +93,7 @@ def build_gene(category: str, summary: str, triggers: list[str]) -> dict:
         "trigger": triggers,
         "signals_match": triggers,
         "signal_patterns": triggers,
-        "strategy": [summary],
+        "strategy": [s.strip() for s in summary.split("；") if s.strip()] if "；" in summary else [summary, f"验证{category}结果"],
         "constraints": {"languages": ["python"], "modules": []},
     }
     gene["asset_id"] = compute_asset_id(gene)
@@ -115,6 +115,8 @@ def build_capsule(
         "trigger": trigger,
         "gene": gene_id,
         "summary": summary,
+        "content": summary,
+        "strategy": [s.strip() for s in summary.split("；") if s.strip()] if "；" in summary else [summary],
         "confidence": confidence,
         "blast_radius": {"files": files, "lines": lines},
         "outcome": {"status": "validated", "score": confidence},

@@ -1,0 +1,9 @@
+# Optional ML dependencies for CLIP search
+# Install with: pip install -r requirements-ml.txt
+
+torch>=2.0
+transformers>=4.38
+ultralytics>=8.1
+opencv-python-headless>=4.9
+Pillow>=10.0
+numpy>=1.24

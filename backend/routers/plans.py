@@ -1,20 +1,18 @@
 """发布计划路由"""
+import sqlite3
 from datetime import date
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.database import get_db
+from backend.models import PlanItemsIn
 
 router = APIRouter()
 
 
 class PlanCreate(BaseModel):
     plan_date: str = ""
-
-
-class PlanItemsIn(BaseModel):
-    sku_codes: list[str]
 
 
 class PlanItemPatch(BaseModel):
@@ -33,7 +31,7 @@ async def create_plan(body: PlanCreate):
         )
         plan_id = cursor.lastrowid
         await db.commit()
-    except Exception:
+    except sqlite3.IntegrityError:
         # 已存在，取现有的
         cursor = await db.execute(
             "SELECT id FROM plans WHERE plan_date = ?", (plan_date,)
@@ -48,8 +46,8 @@ async def create_plan(body: PlanCreate):
 
 
 @router.get("")
-async def get_plans(date: str = ""):
-    """获取计划列表（可按日期过滤）"""
+async def get_plans(date: str = "", enriched: bool = False):
+    """获取计划列表（可按日期过滤，enriched=true 返回带商品详情的版本）"""
     db = await get_db()
     if date:
         cursor = await db.execute(
@@ -62,7 +60,10 @@ async def get_plans(date: str = ""):
     rows = await cursor.fetchall()
     results = []
     for r in rows:
-        plan = await _get_plan_detail(r["id"])
+        if enriched:
+            plan = await _get_enriched_plan_detail(r["id"])
+        else:
+            plan = await _get_plan_detail(r["id"])
         results.append(plan)
     return results
 
@@ -74,29 +75,13 @@ async def get_today_plan():
     db = await get_db()
 
     cursor = await db.execute(
-        "SELECT id, plan_date, status, created_at FROM plans WHERE plan_date = ?", (today,)
+        "SELECT id FROM plans WHERE plan_date = ?", (today,)
     )
     plan = await cursor.fetchone()
     if not plan:
         return None
 
-    plan_id = plan["id"]
-    cursor = await db.execute("""
-        SELECT pi.id, pi.sku_code, pi.sort_order, pi.status,
-            p.product_name, p.image_path, p.price, p.shop_name, p.promo_link,
-            (SELECT COUNT(*) FROM leads l WHERE l.sku_code = pi.sku_code) AS lead_count,
-            (SELECT COUNT(*) FROM verified_clips vc WHERE vc.sku_code = pi.sku_code) AS verified_count
-        FROM plan_items pi
-        LEFT JOIN products p ON p.sku_code = pi.sku_code
-        WHERE pi.plan_id = ?
-        ORDER BY pi.sort_order
-    """, (plan_id,))
-    items = await cursor.fetchall()
-
-    return {
-        **dict(plan),
-        "items": [dict(item) for item in items],
-    }
+    return await _get_enriched_plan_detail(plan["id"])
 
 
 @router.post("/{plan_id}/items")
@@ -123,7 +108,7 @@ async def add_plan_items(plan_id: int, body: PlanItemsIn):
                 "INSERT INTO plan_items (plan_id, sku_code, sort_order) VALUES (?, ?, ?)",
                 (plan_id, sku_code, next_sort + i),
             )
-        except Exception:
+        except sqlite3.IntegrityError:
             pass  # UNIQUE 冲突跳过
 
     await db.commit()
@@ -181,6 +166,34 @@ async def _get_plan_detail(plan_id: int) -> dict:
         "SELECT id, sku_code, sort_order, status FROM plan_items WHERE plan_id = ? ORDER BY sort_order",
         (plan_id,),
     )
+    items = await cursor.fetchall()
+
+    return {
+        **dict(plan),
+        "items": [dict(item) for item in items],
+    }
+
+
+async def _get_enriched_plan_detail(plan_id: int) -> dict:
+    """获取计划完整信息（含商品详情、线索数、已审数）"""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id, plan_date, status, created_at FROM plans WHERE id = ?", (plan_id,)
+    )
+    plan = await cursor.fetchone()
+    if not plan:
+        raise HTTPException(404, "计划不存在")
+
+    cursor = await db.execute("""
+        SELECT pi.id, pi.sku_code, pi.sort_order, pi.status,
+            p.product_name, p.image_path, p.price, p.shop_name, p.promo_link,
+            (SELECT COUNT(*) FROM leads l WHERE l.sku_code = pi.sku_code) AS lead_count,
+            (SELECT COUNT(*) FROM verified_clips vc WHERE vc.sku_code = pi.sku_code) AS verified_count
+        FROM plan_items pi
+        LEFT JOIN products p ON p.sku_code = pi.sku_code
+        WHERE pi.plan_id = ?
+        ORDER BY pi.sort_order
+    """, (plan_id,))
     items = await cursor.fetchall()
 
     return {

@@ -7,7 +7,7 @@ import { uploadXlsx, fetchSnapshots, fetchDiffs, fetchMissingImages, importDownl
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { ChevronDown, ChevronRight, AlertTriangle, Download, FolderInput, Loader2, Globe } from 'lucide-react'
+import { ChevronDown, ChevronRight, AlertTriangle, FolderInput, Loader2, Globe } from 'lucide-react'
 import type { ImportDiff, Snapshot } from '@/types'
 
 export default function ImportPage() {
@@ -47,7 +47,7 @@ export default function ImportPage() {
     setOpeningBrowser(true)
     setBrowserResult(null)
     try {
-      const res = await browserBatchDownload(10)
+      const res = await browserBatchDownload([], 10)
       setBrowserResult(res)
     } catch (err) {
       alert(`打开浏览器失败: ${err instanceof Error ? err.message : err}`)

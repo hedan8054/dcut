@@ -6,7 +6,21 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.config import DATA_DIR
 from backend.database import init_db, close_db
-from backend.routers import import_router, skus, leads, verified, plans, video, search, settings
+from backend.routers import (
+    import_router,
+    skus,
+    leads,
+    verified,
+    plans,
+    video_registry,
+    video_nas,
+    video_media,
+    video_proxy,
+    video_clip_search,
+    search,
+    settings,
+    review_capsules,
+)
 
 
 @asynccontextmanager
@@ -34,9 +48,14 @@ app.include_router(skus.router, prefix="/api/skus", tags=["skus"])
 app.include_router(leads.router, prefix="/api/leads", tags=["leads"])
 app.include_router(verified.router, prefix="/api/verified", tags=["verified"])
 app.include_router(plans.router, prefix="/api/plans", tags=["plans"])
-app.include_router(video.router, prefix="/api/video", tags=["video"])
+app.include_router(video_registry.router, prefix="/api/video", tags=["video"])
+app.include_router(video_nas.router, prefix="/api/video", tags=["video"])
+app.include_router(video_media.router, prefix="/api/video", tags=["video"])
+app.include_router(video_proxy.router, prefix="/api/video", tags=["video"])
+app.include_router(video_clip_search.router, prefix="/api/video", tags=["video"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
+app.include_router(review_capsules.router, prefix="/api/review-capsules", tags=["review-capsules"])
 
 
 # 静态文件：SKU 图片、帧缓存等

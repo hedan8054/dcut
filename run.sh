@@ -9,6 +9,13 @@ echo "=== LiveCuts v1.2 ==="
 # 创建数据目录
 mkdir -p data/{snapshots,frames,sku_images,thumbnails}
 
+# 选择可用 Python（优先 Homebrew 版本，避免缺少依赖）
+if [ -x /opt/homebrew/bin/python3.14 ]; then
+    PY_BIN=/opt/homebrew/bin/python3.14
+else
+    PY_BIN=python3
+fi
+
 # 停止旧进程
 echo "清理旧进程..."
 lsof -ti:8421 | xargs kill -9 2>/dev/null || true
@@ -17,7 +24,7 @@ sleep 1
 
 # 启动后端
 echo "启动后端 (port 8421)..."
-python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8421 &
+$PY_BIN -m uvicorn backend.main:app --host 0.0.0.0 --port 8421 &
 BACKEND_PID=$!
 sleep 2
 

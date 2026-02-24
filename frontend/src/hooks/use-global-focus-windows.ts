@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { batchFrames } from '@/api/client'
+import { runWithLimit } from '@/lib/async-utils'
 
-export type GlobalOverviewZoom = '1s' | '10s' | '60s' | '90s'
+export type GlobalOverviewZoom = '1s' | '10s' | '60s' | '2min'
 
 export interface GlobalOverviewFrame {
   timestamp: number
@@ -13,27 +14,13 @@ const GLOBAL_FRAME_H = 160
 const BATCH_SIZE = 240
 const MAX_BATCH_CONCURRENCY = 2
 
-function runWithLimit<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
-  let idx = 0
-  const runners = Array.from(
-    { length: Math.min(limit, items.length) },
-    async () => {
-      while (idx < items.length) {
-        const cur = items[idx++]
-        await worker(cur)
-      }
-    },
-  )
-  return Promise.all(runners)
-}
-
 function computeIntervalSec(duration: number, frameSlots: number, zoomLevel: GlobalOverviewZoom) {
   if (duration <= 0) return zoomLevel === '1s' ? 1 : 5
   const density =
     zoomLevel === '1s' ? 2
       : zoomLevel === '10s' ? 1
         : zoomLevel === '60s' ? 0.8
-          : 0.7
+          : 0.6
   const raw = duration / Math.max(1, frameSlots * density)
   const base = zoomLevel === '1s' ? 1 : 5
   return Math.max(base, Math.round(raw / base) * base)
@@ -51,7 +38,7 @@ function buildSampleTimestamps(
     zoomLevel === '1s' ? 2
       : zoomLevel === '10s' ? 1
         : zoomLevel === '60s' ? 0.8
-          : 0.7
+          : 0.6
   const targetCount = Math.max(2, Math.round(frameSlots * density))
   const maxGridTs = Math.floor(duration / intervalSec) * intervalSec
   if (maxGridTs <= 0) return [0]

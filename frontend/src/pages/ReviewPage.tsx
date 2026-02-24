@@ -1,24 +1,28 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useReviewStore } from '@/stores/reviewStore'
 import {
-  fetchTodayPlan, fetchVerified, createVerified,
-  fetchVideoRegistry, registerVideo, fetchSkuImages,
-  fetchSkuSessions, clipSearch, type ClipSearchResult,
+  fetchTodayPlan,
+  fetchVerified,
+  fetchVideoRegistry,
+  registerVideo,
+  fetchSkuImages,
+  fetchSkuSessions,
 } from '@/api/client'
 import { SkuPanel } from '@/components/review/SkuPanel'
 import { SessionTopBar } from '@/components/review/SessionTopBar'
 import { GlobalTimeline } from '@/components/review/GlobalTimeline'
-import { MultiRowTimeline, type ZoomLevel } from '@/components/review/MultiRowTimeline'
+import { MultiRowTimeline } from '@/components/review/MultiRowTimeline'
 import { AnnotationBar } from '@/components/review/AnnotationBar'
 import { NasScanPanel } from '@/components/review/NasScanPanel'
+import { useCapsuleManager } from '@/hooks/use-capsule-manager'
+import { useClipSearch } from '@/hooks/use-clip-search'
 import { useMultiResFrames } from '@/hooks/use-multi-res-frames'
+import { useUiHint } from '@/hooks/use-ui-hint'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import {
-  Star, ChevronDown, Plus, Loader2, ScanSearch,
-} from 'lucide-react'
+import { Star, ChevronDown, Plus, Loader2, ScanSearch } from 'lucide-react'
 import { formatSec, formatDuration } from '@/lib/format'
 import {
   clampFocusIntoCoarse,
@@ -28,16 +32,25 @@ import {
   rangeSpan,
   type TimeRange,
 } from '@/lib/timeline-range'
-import type { Lead, VerifiedClip, VideoRegistry, SkuImage, EnrichedPlanItem, SessionGroup } from '@/types'
+import type {
+  Lead,
+  VerifiedClip,
+  VideoRegistry,
+  SkuImage,
+  EnrichedPlanItem,
+  SessionGroup,
+} from '@/types'
 
 const COARSE_SPAN_SEC = 20 * 60
 const FOCUS_DEFAULT_SPAN_SEC = 4 * 60
 const FOCUS_MIN_SPAN_SEC = 20
-const ZOOM_INTERVAL_SEC: Record<ZoomLevel, number> = {
-  '1s': 1,
-  '10s': 10,
-  '60s': 60,
-  '2min': 120,
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  if (target.isContentEditable) return true
+  return target.closest('[contenteditable="true"]') !== null
 }
 
 function parseLeadTimestamps(leads: Lead[]): number[] {
@@ -47,7 +60,7 @@ function parseLeadTimestamps(leads: Lead[]): number[] {
       const points: string[] = JSON.parse(lead.time_points_json)
       for (const pt of points) {
         const parts = pt.split(':').map(Number)
-        if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+        if (parts.length >= 2 && !Number.isNaN(parts[0]) && !Number.isNaN(parts[1])) {
           result.push(parts[0] * 3600 + parts[1] * 60)
         }
       }
@@ -61,34 +74,38 @@ function parseLeadTimestamps(leads: Lead[]): number[] {
 export default function ReviewPage() {
   const store = useReviewStore()
   const {
-    currentSkuCode, setCurrentSkuCode,
-    currentLead, setCurrentLead,
-    savedClips, setSavedClips,
-    mode, setMode,
-    sessions, setSessions, sessionsLoading, setSessionsLoading,
-    currentSession, setCurrentSession,
-    videoInfo, setVideoInfo,
-    anchorSec, setAnchorSec,
+    currentSkuCode,
+    setCurrentSkuCode,
+    setCurrentLead,
+    savedClips,
+    setSavedClips,
+    mode,
+    setMode,
+    sessions,
+    setSessions,
+    sessionsLoading,
+    setSessionsLoading,
+    currentSession,
+    setCurrentSession,
+    videoInfo,
+    setVideoInfo,
+    anchorSec,
+    setAnchorSec,
     setViewRange,
-    hitTimestamp, setHitTimestamp,
-    expandedSkuCode, setExpandedSkuCode,
+    expandedSkuCode,
+    setExpandedSkuCode,
   } = store
 
   const [planItems, setPlanItems] = useState<EnrichedPlanItem[]>([])
   const [planLoading, setPlanLoading] = useState(true)
   const [sessionLeads, setSessionLeads] = useState<Lead[]>([])
   const [skuImages, setSkuImages] = useState<SkuImage[]>([])
-  const [clipResults, setClipResults] = useState<ClipSearchResult[]>([])
-  const [clipSearching, setClipSearching] = useState(false)
   const [allVideos, setAllVideos] = useState<VideoRegistry[]>([])
   const [showVideoManager, setShowVideoManager] = useState(false)
   const [regDate, setRegDate] = useState('')
   const [regPath, setRegPath] = useState('')
   const [regLabel, setRegLabel] = useState('')
-  const [selectionStart, setSelectionStart] = useState(0)
-  const [selectionEnd, setSelectionEnd] = useState(0)
 
-  const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('60s')
   const [coarseRange, setCoarseRange] = useState<TimeRange>([0, 0])
   const [focusRange, setFocusRange] = useState<TimeRange>([0, 0])
   const [, setTimelineCapacity] = useState(40)
@@ -100,11 +117,7 @@ export default function ReviewPage() {
   const videoId = videoInfo?.id
   const videoDuration = videoInfo?.duration_sec || 4 * 3600
   const leadTimestamps = useMemo(() => parseLeadTimestamps(sessionLeads), [sessionLeads])
-  // 1s 模式只显示聚焦范围，其余模式始终显示全视频（可滚动）
-  const activeRange: TimeRange = useMemo(() => {
-    if (zoomLevel === '1s') return focusRange
-    return [0, videoDuration]
-  }, [focusRange, videoDuration, zoomLevel])
+  const activeRange: TimeRange = focusRange
 
   const framesHook = useMultiResFrames(videoDuration)
   const {
@@ -117,28 +130,73 @@ export default function ReviewPage() {
     progress: frameProgress,
     version: frameVersion,
   } = framesHook
-  const zoomInterval = ZOOM_INTERVAL_SEC[zoomLevel]
-  // 1s zoom 下用 coarseRange 读 L2，让压缩袋之外的帧也可见
-  const l2ReadRange: TimeRange = zoomLevel === '1s' ? coarseRange : activeRange
+
   const l2Frames = useMemo(
-    () => getFrames('L2', l2ReadRange[0], l2ReadRange[1], zoomLevel !== '1s' ? zoomInterval : undefined),
-    [getFrames, l2ReadRange, frameVersion, zoomLevel, zoomInterval],
-  )
-  // L3 也用 coarseRange 读取，配合渐进式加载覆盖更大范围
-  const l3Frames = useMemo(
-    () => getFrames('L3', coarseRange[0], coarseRange[1]),
+    () => getFrames('L2', coarseRange[0], coarseRange[1], 10),
     [getFrames, coarseRange, frameVersion],
   )
+
+  const l3Frames = useMemo(
+    () => getFrames('L3', focusRange[0], focusRange[1]),
+    [getFrames, focusRange, frameVersion],
+  )
+
+  const timelineFrames = useMemo(() => {
+    if (l3Frames.length === 0) return l2Frames
+    const l3Start = l3Frames[0].timestamp
+    const l3End = l3Frames[l3Frames.length - 1].timestamp
+    const l2Before = l2Frames.filter(f => f.timestamp < l3Start)
+    const l2After = l2Frames.filter(f => f.timestamp > l3End)
+    return [...l2Before, ...l3Frames, ...l2After]
+  }, [l2Frames, l3Frames])
+
+  const timelineLoading = frameLoading.L2 || frameLoading.L3
+  const timelineProgress: [number, number] = frameLoading.L3 ? frameProgress.L3 : frameProgress.L2
+
+  const [searchParams] = useSearchParams()
+  const capsuleDryrun = useMemo(() => searchParams.get('capsule_dryrun') === '1', [searchParams])
+  const { hint: uiHint, show: showUiHint } = useUiHint()
+  const { results: clipResults, searching: clipSearching, search: handleClipSearch, clear: clearClipResults } = useClipSearch(videoInfo, skuImages)
+
+  const {
+    capsules,
+    capsulesLoading,
+    activeCapsule,
+    activeCapsuleId,
+    interactionState: capsuleInteractionState,
+    setInteractionState: setCapsuleInteractionState,
+    undoPending: undoDelete,
+    clearUndoState,
+    createCapsule: handleCreateCapsule,
+    createDefaultCapsuleAt,
+    updateGeometry: handleUpdateCapsuleGeometry,
+    activateCapsule: handleActivateCapsule,
+    handleFrameSelect,
+    patchActive: handlePatchActiveCapsule,
+    deleteActive: handleDeleteActiveCapsule,
+    undoDeleteCapsule: handleUndoDelete,
+    cycleOverlapAtAnchor,
+  } = useCapsuleManager({
+    videoInfo,
+    videoPath,
+    videoId,
+    videoDuration,
+    anchorSec,
+    setAnchorSec,
+    currentSkuCode,
+    setMode,
+    dryrun: capsuleDryrun,
+    showUiHint,
+  })
 
   useEffect(() => {
     setViewRange(activeRange)
   }, [activeRange, setViewRange])
 
   useEffect(() => {
-    if (!videoPath || zoomLevel === '1s') return
-    // 按当前 zoom 级别的间隔加载帧，避免 60s 视图按 10s 间隔抽帧浪费
-    extendRange(videoPath, videoId, 'L2', activeRange[0], activeRange[1], zoomInterval)
-  }, [activeRange, extendRange, videoId, videoPath, zoomLevel, zoomInterval])
+    if (!videoPath) return
+    extendRange(videoPath, videoId, 'L2', coarseRange[0], coarseRange[1], 10)
+  }, [coarseRange, extendRange, videoId, videoPath])
 
   useEffect(() => {
     fetchTodayPlan()
@@ -157,7 +215,6 @@ export default function ReviewPage() {
     const focus = clampFocusIntoCoarse(focusSeed, coarse, duration, FOCUS_MIN_SPAN_SEC)
     setCoarseRange(coarse)
     setFocusRange(focus)
-    setZoomLevel('60s')
     return { coarse, focus }
   }, [])
 
@@ -168,34 +225,36 @@ export default function ReviewPage() {
     setVideoInfo(video)
     setMode('browse')
     resetFrames()
+    clearUndoState()
 
     const dur = video?.duration_sec || 4 * 3600
     const timestamps = parseLeadTimestamps(session.leads)
     const anchor = timestamps.length > 0 ? timestamps[0] : 0
     setAnchorSec(anchor)
     if (session.leads.length > 0) setCurrentLead(session.leads[0])
-    const { coarse } = bootstrapRanges(anchor, dur)
+    const { coarse, focus } = bootstrapRanges(anchor, dur)
 
     if (video) {
       const vPath = video.proxy_path || video.raw_path
       startPreload(vPath, anchor, video.id)
-      // 初始 zoom 是 60s，按 60s 间隔加载
-      extendRange(vPath, video.id, 'L2', coarse[0], coarse[1], ZOOM_INTERVAL_SEC['60s'])
+      extendRange(vPath, video.id, 'L2', coarse[0], coarse[1], 10)
+      loadL3(vPath, rangeCenter(focus), video.id)
     }
-    setClipResults([])
+    clearClipResults()
   }, [
     bootstrapRanges,
     extendRange,
+    loadL3,
     resetFrames,
     setAnchorSec,
     setCurrentLead,
     setCurrentSession,
     setMode,
+    clearUndoState,
     startPreload,
     setVideoInfo,
   ])
 
-  // 用 ref 持有 selectSession 最新引用，避免 useEffect 因其变化重复触发
   const selectSessionRef = useRef(selectSession)
   selectSessionRef.current = selectSession
 
@@ -205,6 +264,7 @@ export default function ReviewPage() {
       setSessions([])
       setCurrentSession(null)
       setVideoInfo(null)
+      clearUndoState()
       return
     }
 
@@ -227,26 +287,25 @@ export default function ReviewPage() {
     setSavedClips,
     setSessions,
     setSessionsLoading,
+    clearUndoState,
     setVideoInfo,
   ])
 
-  const [searchParams] = useSearchParams()
   useEffect(() => {
     const skuParam = searchParams.get('sku')
     if (skuParam && !planLoading) setCurrentSkuCode(skuParam.toUpperCase())
   }, [searchParams, planLoading, setCurrentSkuCode])
 
   const handleSelectSku = useCallback((code: string) => {
+    clearUndoState()
     setCurrentSkuCode(code)
     setExpandedSkuCode(code)
     setCurrentLead(null)
     setVideoInfo(null)
     setSessionLeads([])
-    setClipResults([])
+    clearClipResults()
     setMode('browse')
-    setSelectionStart(0)
-    setSelectionEnd(0)
-  }, [setCurrentSkuCode, setExpandedSkuCode, setCurrentLead, setVideoInfo, setMode])
+  }, [clearUndoState, setCurrentSkuCode, setExpandedSkuCode, setCurrentLead, setVideoInfo, setMode])
 
   const handleToggleExpand = useCallback((code: string) => {
     setExpandedSkuCode(expandedSkuCode === code ? '' : code)
@@ -269,11 +328,8 @@ export default function ReviewPage() {
     setFocusRange(nextFocus)
 
     if (videoPath) {
-      extendRange(videoPath, videoId, 'L2', nextCoarse[0], nextCoarse[1], zoomInterval)
-      if (zoomLevel === '1s') {
-        extendRange(videoPath, videoId, 'L2', nextFocus[0], nextFocus[1])
-        loadL3(videoPath, rangeCenter(nextFocus), videoId)
-      }
+      extendRange(videoPath, videoId, 'L2', nextCoarse[0], nextCoarse[1], 10)
+      loadL3(videoPath, rangeCenter(nextFocus), videoId)
     }
   }, [
     coarseRange,
@@ -284,76 +340,22 @@ export default function ReviewPage() {
     videoDuration,
     videoId,
     videoPath,
-    zoomLevel,
-    zoomInterval,
   ])
 
   const handleCoarseRangeChange = useCallback((range: TimeRange) => {
     const nextCoarse = clampRange(range, videoDuration, FOCUS_MIN_SPAN_SEC)
     setCoarseRange(nextCoarse)
     setFocusRange(prev => clampFocusIntoCoarse(prev, nextCoarse, videoDuration, FOCUS_MIN_SPAN_SEC))
-    if (videoPath) extendRange(videoPath, videoId, 'L2', nextCoarse[0], nextCoarse[1], zoomInterval)
-  }, [videoDuration, videoPath, videoId, extendRange, zoomInterval])
+    if (videoPath) extendRange(videoPath, videoId, 'L2', nextCoarse[0], nextCoarse[1], 10)
+  }, [videoDuration, videoPath, videoId, extendRange])
 
   const handleFocusRangeChange = useCallback((range: TimeRange) => {
     const nextFocus = clampFocusIntoCoarse(range, coarseRange, videoDuration, FOCUS_MIN_SPAN_SEC)
     setFocusRange(nextFocus)
     if (!videoPath) return
-    extendRange(videoPath, videoId, 'L2', nextFocus[0], nextFocus[1], zoomInterval)
-    if (zoomLevel === '1s') loadL3(videoPath, rangeCenter(nextFocus), videoId)
-  }, [coarseRange, videoDuration, videoPath, videoId, extendRange, loadL3, zoomLevel, zoomInterval])
-
-  const handleZoomChange = useCallback((zoom: ZoomLevel) => {
-    setZoomLevel(zoom)
-    if (!videoPath) return
-    // 切换 zoom 时按新的间隔补帧
-    const newInterval = ZOOM_INTERVAL_SEC[zoom]
-    extendRange(videoPath, videoId, 'L2', activeRange[0], activeRange[1], newInterval)
-    if (zoom === '1s') {
-      loadL3(videoPath, rangeCenter(focusRange), videoId)
-    }
-  }, [videoPath, videoId, extendRange, loadL3, focusRange, activeRange])
-
-  const handleRequestL3 = useCallback((centerSec: number) => {
-    if (videoPath) loadL3(videoPath, centerSec, videoId)
-  }, [videoPath, videoId, loadL3])
-
-  const handleClipSearch = useCallback(async () => {
-    if (!videoInfo || skuImages.length === 0) return
-    setClipSearching(true)
-    setClipResults([])
-    try {
-      const res = await clipSearch({
-        sku_image_path: skuImages[0].file_path,
-        video_path: videoInfo.proxy_path || videoInfo.raw_path,
-        video_duration: videoInfo.duration_sec || 4 * 3600,
-        sample_interval: 30,
-        top_k: 12,
-      })
-      setClipResults(res.results)
-    } catch (err) {
-      console.error('CLIP 搜索失败:', err)
-      alert(`CLIP 搜索失败: ${err instanceof Error ? err.message : err}`)
-    } finally {
-      setClipSearching(false)
-    }
-  }, [videoInfo, skuImages])
-
-  const handleSelectionRangeChange = useCallback((range: [number, number]) => {
-    setSelectionStart(range[0])
-    setSelectionEnd(range[1])
-  }, [])
-
-  /** 点帧 → 切 1s zoom + L3 加载 + 进入标注模式 */
-  const handleFrameSelect = useCallback((timestamp: number) => {
-    setHitTimestamp(timestamp)
-    setSelectionStart(Math.max(0, timestamp - 5))
-    setSelectionEnd(Math.min(videoDuration, timestamp + 5))
-    setMode('annotate')
-    // 自动切到 1s 精查 + 触发 L3 加载
-    if (zoomLevel !== '1s') setZoomLevel('1s')
-    if (videoPath) loadL3(videoPath, timestamp, videoId)
-  }, [setHitTimestamp, setMode, videoDuration, zoomLevel, videoPath, videoId, loadL3])
+    extendRange(videoPath, videoId, 'L2', nextFocus[0], nextFocus[1], 10)
+    loadL3(videoPath, rangeCenter(nextFocus), videoId)
+  }, [coarseRange, videoDuration, videoPath, videoId, extendRange, loadL3])
 
   const handleVideoInfoUpdate = useCallback((nextVideo: VideoRegistry) => {
     setVideoInfo(nextVideo)
@@ -363,70 +365,6 @@ export default function ReviewPage() {
       s.date === currentSession.date ? { ...s, video: nextVideo } : s
     )))
   }, [currentSession, sessions, setSessions, setVideoInfo])
-
-  const handleSave = useCallback(async (data: {
-    start_sec: number
-    end_sec: number
-    rating: number
-    tags: string[]
-  }) => {
-    if (!currentSkuCode || !currentLead || !videoInfo) return
-
-    await createVerified({
-      sku_code: currentSkuCode,
-      lead_id: currentLead.id,
-      video_path: videoInfo.proxy_path || videoInfo.raw_path,
-      raw_video_path: videoInfo.raw_path,
-      start_sec: data.start_sec,
-      end_sec: data.end_sec,
-      rating: data.rating,
-      tags: data.tags,
-      lead_time_original: currentLead.time_points_json,
-      offset_sec: data.start_sec - anchorSec,
-    })
-
-    const clips = await fetchVerified(currentSkuCode)
-    setSavedClips(clips)
-
-    const currentIdx = sessionLeads.findIndex(l => l.id === currentLead.id)
-    if (currentIdx >= 0 && currentIdx < sessionLeads.length - 1) {
-      const nextLead = sessionLeads[currentIdx + 1]
-      setCurrentLead(nextLead)
-      const timestamps = parseLeadTimestamps([nextLead])
-      if (timestamps.length > 0) {
-        const nextAnchor = timestamps[0]
-        setAnchorSec(nextAnchor)
-        const nextCoarse = makeCenteredRange(nextAnchor, COARSE_SPAN_SEC, videoDuration)
-        const nextFocus = clampFocusIntoCoarse(
-          makeCenteredRange(nextAnchor, FOCUS_DEFAULT_SPAN_SEC, videoDuration),
-          nextCoarse,
-          videoDuration,
-          FOCUS_MIN_SPAN_SEC,
-        )
-        setCoarseRange(nextCoarse)
-        setFocusRange(nextFocus)
-        setZoomLevel('60s')
-        if (videoPath) extendRange(videoPath, videoId, 'L2', nextCoarse[0], nextCoarse[1], ZOOM_INTERVAL_SEC['60s'])
-      }
-    }
-    setMode('browse')
-    setSelectionStart(0)
-    setSelectionEnd(0)
-  }, [
-    currentSkuCode,
-    currentLead,
-    videoInfo,
-    anchorSec,
-    setSavedClips,
-    sessionLeads,
-    setCurrentLead,
-    setAnchorSec,
-    setMode,
-    videoDuration,
-    videoPath,
-    videoId,
-    extendRange,
-  ])
 
   const handleRegisterVideo = useCallback(async () => {
     if (!regDate || !regPath) return
@@ -445,6 +383,41 @@ export default function ReviewPage() {
     }
   }, [regDate, regPath, regLabel])
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (!activeCapsule) return
+        e.preventDefault()
+        void handleDeleteActiveCapsule()
+        return
+      }
+
+      if (e.key === 'n' || e.key === 'N') {
+        if (!videoPath) return
+        e.preventDefault()
+        void createDefaultCapsuleAt(anchorSec)
+        return
+      }
+
+      if (e.key !== 'Tab') return
+      const switched = cycleOverlapAtAnchor(e.shiftKey)
+      if (!switched) return
+      e.preventDefault()
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [
+    activeCapsule,
+    anchorSec,
+    createDefaultCapsuleAt,
+    cycleOverlapAtAnchor,
+    handleDeleteActiveCapsule,
+    videoPath,
+  ])
+
   return (
     <div className="flex h-full">
       <SkuPanel
@@ -454,11 +427,7 @@ export default function ReviewPage() {
         sessions={sessions}
         currentSkuCode={currentSkuCode}
         expandedSkuCode={expandedSkuCode}
-        seekTimestamp={
-          mode === 'annotate'
-            ? hitTimestamp
-            : (videoInfo?.proxy_status === 'done' ? anchorSec : 0)
-        }
+        seekTimestamp={videoInfo?.proxy_status === 'done' ? anchorSec : 0}
         currentSession={currentSession}
         videoInfo={videoInfo}
         onSelectSession={handleSelectSessionFromTopBar}
@@ -550,7 +519,7 @@ export default function ReviewPage() {
                   videoDuration={videoDuration}
                   leadTimestamps={leadTimestamps}
                   currentCenter={anchorSec}
-                  zoomLevel={zoomLevel}
+                  zoomLevel={'1s'}
                   coarseRange={coarseRange}
                   focusRange={focusRange}
                   onSeek={handleTimelineSeek}
@@ -573,9 +542,25 @@ export default function ReviewPage() {
                     以图找图
                   </Button>
                   {clipResults.length > 0 && (
-                    <Button variant="ghost" size="sm" className="text-xs h-8" onClick={() => setClipResults([])}>
+                    <Button variant="ghost" size="sm" className="text-xs h-8" onClick={() => clearClipResults()}>
                       清除 CLIP ({clipResults.length})
                     </Button>
+                  )}
+                  {capsulesLoading && (
+                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      加载胶囊...
+                    </span>
+                  )}
+                  {capsuleDryrun && (
+                    <Badge className="text-[11px] bg-orange-500/20 text-orange-300 border border-orange-500/40">
+                      capsule_dryrun=1 · 本地模式不落库
+                    </Badge>
+                  )}
+                  {capsuleInteractionState !== 'idle' && (
+                    <Badge variant="outline" className="text-[11px]">
+                      {capsuleInteractionState === 'dragging' ? '胶囊拖拽中' : '胶囊激活中'}
+                    </Badge>
                   )}
                 </div>
               )}
@@ -583,27 +568,22 @@ export default function ReviewPage() {
               {videoPath && (
                 <MultiRowTimeline
                   anchorSec={anchorSec}
-                  videoDuration={videoDuration}
-                  zoomLevel={zoomLevel}
-                  onZoomChange={handleZoomChange}
                   displayRange={activeRange}
                   coarseRange={coarseRange}
                   focusRange={focusRange}
                   onFocusRangeChange={handleFocusRangeChange}
+                  frames={timelineFrames}
+                  sampleFrames={l2Frames}
+                  loading={timelineLoading}
+                  progress={timelineProgress}
+                  capsules={capsules}
+                  activeCapsuleId={activeCapsuleId}
                   onFrameSelect={handleFrameSelect}
-                  l2Frames={l2Frames}
-                  l3Frames={l3Frames}
-                  l2Loading={frameLoading.L2}
-                  l3Loading={frameLoading.L3}
-                  l2Progress={frameProgress.L2}
-                  l3Progress={frameProgress.L3}
-                  onRequestL3={handleRequestL3}
+                  onCreateCapsule={(range) => { void handleCreateCapsule(range) }}
+                  onUpdateCapsule={(capsuleId, patch) => { void handleUpdateCapsuleGeometry(capsuleId, patch) }}
+                  onActivateCapsule={handleActivateCapsule}
+                  onInteractionStateChange={setCapsuleInteractionState}
                   onViewportCapacityChange={setTimelineCapacity}
-                  clipTimestamps={clipResults.length > 0 ? clipResults.map(r => r.timestamp) : undefined}
-                  selectionRange={mode === 'annotate' ? [selectionStart, selectionEnd] : null}
-                  playheadSec={mode === 'annotate' ? hitTimestamp : null}
-                  onSelectionRangeChange={handleSelectionRangeChange}
-                  hitTimestamp={hitTimestamp}
                 />
               )}
 
@@ -624,19 +604,13 @@ export default function ReviewPage() {
           )}
         </div>
 
-        {mode === 'annotate' && videoPath && (
+        {mode === 'annotate' && activeCapsule && (
           <AnnotationBar
-            hitTimestamp={hitTimestamp}
-            startSec={selectionStart}
-            endSec={selectionEnd}
-            onStartChange={setSelectionStart}
-            onEndChange={setSelectionEnd}
-            onSave={handleSave}
-            onCancel={() => {
-              setMode('browse')
-              setSelectionStart(0)
-              setSelectionEnd(0)
-            }}
+            capsule={activeCapsule}
+            currentSkuCode={currentSkuCode}
+            onPatch={handlePatchActiveCapsule}
+            onDelete={handleDeleteActiveCapsule}
+            onClose={() => setMode('browse')}
           />
         )}
 
@@ -653,6 +627,28 @@ export default function ReviewPage() {
           </div>
         )}
       </div>
+
+      {uiHint && (
+        <div
+          className="fixed right-4 z-[120] rounded border border-emerald-400/40 bg-black/80 px-3 py-2 text-xs text-emerald-200 shadow-lg"
+          style={{ bottom: undoDelete ? 86 : 16 }}
+        >
+          {uiHint.text}
+        </div>
+      )}
+
+      {undoDelete && (
+        <div className="fixed right-4 bottom-4 z-[121] rounded border border-yellow-500/50 bg-black/85 px-3 py-2 shadow-lg">
+          <div className="text-xs text-yellow-100">
+            已删除 capsule #{undoDelete.item.id}
+          </div>
+          <div className="mt-2 flex justify-end">
+            <Button size="sm" variant="secondary" className="h-7 text-xs" onClick={() => { void handleUndoDelete() }}>
+              撤销（5s）
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

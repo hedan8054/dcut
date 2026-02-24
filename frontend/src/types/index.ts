@@ -85,6 +85,30 @@ export interface VerifiedClip {
   created_at: string
 }
 
+export type CapsuleInteractionState = 'idle' | 'activating' | 'dragging'
+export type ReviewCapsuleStatus = 'draft' | 'bound' | 'final'
+export type ReviewCapsuleDisplayMode = 'compressed'
+
+export interface ReviewCapsule {
+  id: number
+  video_id: number | null
+  video_path: string
+  start_sec: number
+  end_sec: number
+  display_mode: ReviewCapsuleDisplayMode
+  compression_ratio: number
+  sample_interval_sec: number
+  sku_code: string | null
+  sku_label: string | null
+  rating: number
+  tags_json: string
+  notes: string
+  z_index: number
+  status: ReviewCapsuleStatus
+  created_at: string
+  updated_at: string
+}
+
 // ---- 发布计划 ----
 
 export interface Plan {

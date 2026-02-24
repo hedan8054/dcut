@@ -1,4 +1,6 @@
 """Pydantic 数据模型"""
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -109,6 +111,67 @@ class VerifiedClipPatch(BaseModel):
     rating: int | None = None
     tags: list[str] | None = None
     notes: str | None = None
+
+
+class ReviewCapsuleIn(BaseModel):
+    video_id: int | None = None
+    video_path: str
+    start_sec: float
+    end_sec: float
+    display_mode: Literal['compressed'] = 'compressed'
+    compression_ratio: float = 0.5
+    sample_interval_sec: float = 10
+    sku_code: str | None = None
+    sku_label: str | None = None
+    rating: int = 0
+    tags: list[str] = []
+    notes: str = ""
+    z_index: int = 0
+    status: Literal['draft', 'bound', 'final'] = 'draft'
+
+
+class ReviewCapsuleOut(BaseModel):
+    id: int
+    video_id: int | None
+    video_path: str
+    start_sec: float
+    end_sec: float
+    display_mode: Literal['compressed']
+    compression_ratio: float
+    sample_interval_sec: float
+    sku_code: str | None
+    sku_label: str | None
+    rating: int
+    tags_json: str
+    notes: str
+    z_index: int
+    status: Literal['draft', 'bound', 'final']
+    created_at: str
+    updated_at: str
+
+
+class ReviewCapsulePatch(BaseModel):
+    start_sec: float | None = None
+    end_sec: float | None = None
+    display_mode: Literal['compressed'] | None = None
+    compression_ratio: float | None = None
+    sample_interval_sec: float | None = None
+    sku_code: str | None = None
+    sku_label: str | None = None
+    rating: int | None = None
+    tags: list[str] | None = None
+    notes: str | None = None
+    z_index: int | None = None
+    status: Literal['draft', 'bound', 'final'] | None = None
+
+
+class ReviewCapsuleZOrder(BaseModel):
+    id: int
+    z_index: int
+
+
+class ReviewCapsuleReorderIn(BaseModel):
+    orders: list[ReviewCapsuleZOrder]
 
 
 # ---- 发布计划 ----

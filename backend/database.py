@@ -7,7 +7,8 @@ db: aiosqlite.Connection | None = None
 
 async def get_db() -> aiosqlite.Connection:
     """获取全局数据库连接"""
-    assert db is not None, "数据库未初始化，请先调用 init_db()"
+    if db is None:
+        raise RuntimeError("数据库未初始化，请先调用 init_db()")
     return db
 
 
@@ -109,6 +110,35 @@ async def _create_tables(conn: aiosqlite.Connection) -> None:
         );
 
         CREATE INDEX IF NOT EXISTS idx_verified_sku ON verified_clips(sku_code);
+
+        CREATE TABLE IF NOT EXISTS review_capsules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id INTEGER REFERENCES video_registry(id) ON DELETE SET NULL,
+            video_path TEXT NOT NULL,
+            start_sec REAL NOT NULL,
+            end_sec REAL NOT NULL,
+            display_mode TEXT NOT NULL DEFAULT 'compressed',
+            compression_ratio REAL NOT NULL DEFAULT 0.5,
+            sample_interval_sec REAL NOT NULL DEFAULT 10,
+            sku_code TEXT DEFAULT NULL,
+            sku_label TEXT DEFAULT NULL,
+            rating INTEGER DEFAULT 0 CHECK(rating BETWEEN 0 AND 5),
+            tags_json TEXT DEFAULT '[]',
+            notes TEXT DEFAULT '',
+            z_index INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'draft',
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            updated_at TEXT DEFAULT (datetime('now','localtime')),
+            CHECK(end_sec > start_sec),
+            CHECK(status IN ('draft', 'bound', 'final'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_review_capsules_video_updated
+            ON review_capsules(video_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_review_capsules_video_range
+            ON review_capsules(video_id, start_sec, end_sec);
+        CREATE INDEX IF NOT EXISTS idx_review_capsules_sku
+            ON review_capsules(sku_code);
 
         CREATE TABLE IF NOT EXISTS plans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

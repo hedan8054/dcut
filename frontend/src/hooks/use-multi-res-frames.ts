@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
 import { batchFrames } from '@/api/client'
+import { runWithLimit } from '@/lib/async-utils'
 
 export interface FrameData {
   timestamp: number
@@ -29,24 +30,7 @@ const LAYER_CONFIG: Record<ResLayer, LayerConfig> = {
 
 export { LAYER_CONFIG }
 
-/** 限制并发数的批处理执行器 */
 const MAX_BATCH_CONCURRENCY = 2
-
-async function runWithLimit<T>(
-  items: T[], limit: number, worker: (item: T) => Promise<void>,
-) {
-  let idx = 0
-  const runners = Array.from(
-    { length: Math.min(limit, items.length) },
-    async () => {
-      while (idx < items.length) {
-        const cur = items[idx++]
-        await worker(cur)
-      }
-    },
-  )
-  await Promise.all(runners)
-}
 
 type LoadingState = Record<ResLayer, boolean>
 type ProgressState = Record<ResLayer, [number, number]>

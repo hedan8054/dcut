@@ -7,6 +7,30 @@
       "capsule_id": "sha256:a230e1bec32c2eaec9c807860a8d8e5e77d81342141be0e08f9ee836bcef17b2",
       "summary": "修复 Review 预览误报播放失败并固化排障技能",
       "published_at": "2026-02-22T08:52:50.098534+00:00"
+    },
+    {
+      "gene_id": "sha256:be7c0dd51068ae9f25863fc4d19bc34d54ebac96da5ba54c6fa722bc32522ae6",
+      "capsule_id": "sha256:00b8f7b49c45a4b31fdbc02251271a3e70c1b5e440fe59c66a7cc1fbb0e85f1b",
+      "summary": "SSH/VNC/RDP连接异构机器；osacompile生成.app启动台快捷方式；ssh-keygen -A修复sshd hostkey缺失",
+      "published_at": "2026-02-23T13:28:58.550594+00:00"
+    },
+    {
+      "gene_id": "sha256:6d039a3fd53a3b48af227ced28fe192a747c9cbcc8a6a1ecb54933fb8b300209",
+      "capsule_id": "sha256:4c2e608dd79353dc0fb143f2f99fa54e04205caea710dd0392e8d4c747207f67",
+      "summary": "在settings.json的permissions.allow中配置Bash命令通配符白名单；覆盖git/ssh/python/node等40+常用命令实现免确认自动放行；rm等危险命令不加入白名单保持安全拦截边界",
+      "published_at": "2026-02-23T13:42:03.252432+00:00"
+    },
+    {
+      "gene_id": "sha256:da54bd1040a89e05021dfa4ed320b49a593c3d7102d3e6927aa607a9f2f82686",
+      "capsule_id": "sha256:b77efa016c22b721ba0d875cb18605b8964d00ec0f8b5ece7830519a1742e70a",
+      "summary": "bash轮询监控截图目录检测新增png文件；自动pbcopy路径到剪贴板实现Cmd+V粘贴给CLI工具；osascript通知提示截图就绪状态",
+      "published_at": "2026-02-23T13:44:57.535514+00:00"
+    },
+    {
+      "gene_id": "sha256:4908204d56ba077bb5768fa9ad9b93dc6bdf1d39995fda63f53f89e865545f2a",
+      "capsule_id": "sha256:9bcc98207de574ed84132801e7d74bce6c1b2db51f8ad81e70f9b74f3ff0771f",
+      "summary": "FastMCP Server拦截Claude Code权限确认请求；通过飞书WebSocket长连接接收用户回复实现手机远程审批；自动学习规则系统支持始终允许减少重复确认",
+      "published_at": "2026-02-23T13:45:09.329012+00:00"
     }
   ]
 }

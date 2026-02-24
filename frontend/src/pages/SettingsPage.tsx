@@ -72,8 +72,8 @@ export default function SettingsPage() {
       setSaveMsg('已保存')
       await load()
       setTimeout(() => setSaveMsg(''), 3000)
-    } catch (e: any) {
-      setSaveMsg(`保存失败: ${e.message}`)
+    } catch (e: unknown) {
+      setSaveMsg(`保存失败: ${e instanceof Error ? e.message : e}`)
     } finally {
       setSaving(false)
     }
@@ -85,8 +85,8 @@ export default function SettingsPage() {
     try {
       const res = await migratePaths(oldPrefix, newPrefix, dryRun)
       setMigrateResult(res)
-    } catch (e: any) {
-      alert(`搬家失败: ${e.message}`)
+    } catch (e: unknown) {
+      alert(`搬家失败: ${e instanceof Error ? e.message : e}`)
     } finally {
       setMigrating(false)
     }
@@ -99,8 +99,8 @@ export default function SettingsPage() {
     try {
       const res = await clearFrameCache()
       setClearResult(res)
-    } catch (e: any) {
-      alert(`清空失败: ${e.message}`)
+    } catch (e: unknown) {
+      alert(`清空失败: ${e instanceof Error ? e.message : e}`)
     } finally {
       setClearing(false)
     }
@@ -112,8 +112,8 @@ export default function SettingsPage() {
     try {
       const s = await fetchStorageStats()
       setStats(s)
-    } catch (e: any) {
-      alert(`加载统计失败: ${e.message}`)
+    } catch (e: unknown) {
+      alert(`加载统计失败: ${e instanceof Error ? e.message : e}`)
     } finally {
       setLoadingStats(false)
     }
