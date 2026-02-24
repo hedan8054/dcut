@@ -26,6 +26,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { EnrichedPlan, EnrichedPlanItem } from '@/types'
+import { localToday } from '@/lib/format'
 
 /** 将用户粘贴的文本解析为 SKU 列表（支持逗号、中文逗号、换行、空格分隔） */
 function parseSkuInput(raw: string): string[] {
@@ -77,7 +78,7 @@ function shortDate(dateStr: string) {
 
 /** 判断是否是今天 */
 function isToday(dateStr: string) {
-  return dateStr === new Date().toISOString().slice(0, 10)
+  return dateStr === localToday()
 }
 
 export default function PlanPage() {
@@ -116,7 +117,7 @@ export default function PlanPage() {
       }
     }
     // 默认选中今日，没有今日则选第一个
-    const today = new Date().toISOString().slice(0, 10)
+    const today = localToday()
     const todayPlan = plans.find((p) => p.plan_date === today)
     const selected = todayPlan ?? plans[0] ?? null
     setActivePlan(selected)
@@ -138,7 +139,7 @@ export default function PlanPage() {
     setLoading(true)
     try {
       // 确保今日计划存在
-      const today = new Date().toISOString().slice(0, 10)
+      const today = localToday()
       let todayPlan = allPlans.find((p) => p.plan_date === today)
       let planId = todayPlan?.id
       if (!planId) {

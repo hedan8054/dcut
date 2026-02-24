@@ -8,16 +8,10 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { searchByDate, fetchTodayPlan, createPlan, addPlanItems } from '@/api/client'
 import { ClickableImage } from '@/components/ui/image-preview'
 import type { DateSearchResult } from '@/types'
-
-function localDateISO(): string {
-  // 使用本地日期（而非 UTC toISOString）避免跨零点时“今天”偏到昨天
-  const now = new Date()
-  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
-  return local.toISOString().slice(0, 10)
-}
+import { localToday } from '@/lib/format'
 
 export function DateSearchView() {
-  const [date, setDate] = useState(localDateISO)
+  const [date, setDate] = useState(localToday)
   const [result, setResult] = useState<DateSearchResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [addedSkus, setAddedSkus] = useState<Set<string>>(new Set())
