@@ -38,6 +38,12 @@ interface ReviewState {
   hitTimestamp: number
   setHitTimestamp: (ts: number) => void
 
+  // 播放状态（双播放头）
+  playbackSec: number
+  setPlaybackSec: (sec: number) => void
+  isPlaying: boolean
+  setIsPlaying: (v: boolean) => void
+
   // 新增: 左侧面板展开的 SKU
   expandedSkuCode: string
   setExpandedSkuCode: (code: string) => void
@@ -77,6 +83,12 @@ export const useReviewStore = create<ReviewState>((set) => ({
   setViewRange: (viewRange) => set({ viewRange }),
   hitTimestamp: 0,
   setHitTimestamp: (hitTimestamp) => set({ hitTimestamp }),
+
+  // 播放状态（双播放头）
+  playbackSec: 0,
+  setPlaybackSec: (playbackSec) => set({ playbackSec }),
+  isPlaying: false,
+  setIsPlaying: (isPlaying) => set({ isPlaying }),
 
   // 左侧面板
   expandedSkuCode: '',

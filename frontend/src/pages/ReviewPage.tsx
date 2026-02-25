@@ -35,6 +35,7 @@ import {
 import type {
   Lead,
   VerifiedClip,
+  VideoControl,
   VideoRegistry,
   SkuImage,
   EnrichedPlanItem,
@@ -94,8 +95,11 @@ export default function ReviewPage() {
     setViewRange,
     expandedSkuCode,
     setExpandedSkuCode,
+    playbackSec,
+    isPlaying,
   } = store
 
+  const videoControlRef = useRef<VideoControl | null>(null)
   const [planItems, setPlanItems] = useState<EnrichedPlanItem[]>([])
   const [planLoading, setPlanLoading] = useState(true)
   const [sessionLeads, setSessionLeads] = useState<Lead[]>([])
@@ -401,6 +405,22 @@ export default function ReviewPage() {
         return
       }
 
+      // Space = 从白针播放/暂停；Shift+Space = 从橙针继续
+      if (e.key === ' ' || e.code === 'Space') {
+        if (!videoPath) return
+        e.preventDefault()
+        const vc = videoControlRef.current
+        if (!vc) return
+        if (isPlaying) {
+          vc.pause()
+        } else if (e.shiftKey) {
+          vc.play(playbackSec)
+        } else {
+          vc.play(anchorSec)
+        }
+        return
+      }
+
       if (e.key !== 'Tab') return
       const switched = cycleOverlapAtAnchor(e.shiftKey)
       if (!switched) return
@@ -415,6 +435,8 @@ export default function ReviewPage() {
     createDefaultCapsuleAt,
     cycleOverlapAtAnchor,
     handleDeleteActiveCapsule,
+    isPlaying,
+    playbackSec,
     videoPath,
   ])
 
@@ -430,6 +452,7 @@ export default function ReviewPage() {
         seekTimestamp={videoInfo?.proxy_status === 'done' ? anchorSec : 0}
         currentSession={currentSession}
         videoInfo={videoInfo}
+        videoControlRef={videoControlRef}
         onSelectSession={handleSelectSessionFromTopBar}
         onVideoInfoUpdate={handleVideoInfoUpdate}
         onSelectSku={handleSelectSku}
@@ -519,6 +542,7 @@ export default function ReviewPage() {
                   videoDuration={videoDuration}
                   leadTimestamps={leadTimestamps}
                   currentCenter={anchorSec}
+                  playbackSec={playbackSec}
                   zoomLevel={'1s'}
                   coarseRange={coarseRange}
                   focusRange={focusRange}
@@ -568,6 +592,7 @@ export default function ReviewPage() {
               {videoPath && (
                 <MultiRowTimeline
                   anchorSec={anchorSec}
+                  playbackSec={playbackSec}
                   displayRange={activeRange}
                   coarseRange={coarseRange}
                   focusRange={focusRange}

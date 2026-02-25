@@ -11,7 +11,8 @@ import {
   batchGenerateProxy,
   fetchVideoRegistryById,
 } from '@/api/client'
-import type { EnrichedPlanItem, SkuImage, SessionGroup, VideoRegistry } from '@/types'
+import { useReviewStore } from '@/stores/reviewStore'
+import type { EnrichedPlanItem, SkuImage, SessionGroup, VideoControl, VideoRegistry } from '@/types'
 import { formatDuration } from '@/lib/format'
 
 type PreviewState = 'idle' | 'loading' | 'playable' | 'error' | 'generating_proxy'
@@ -26,6 +27,7 @@ interface Props {
   seekTimestamp: number
   currentSession: SessionGroup | null
   videoInfo: VideoRegistry | null
+  videoControlRef?: React.MutableRefObject<VideoControl | null>
   onSelectSession: (session: SessionGroup) => void
   onVideoInfoUpdate: (video: VideoRegistry) => void
   onSelect: (code: string) => void
@@ -34,7 +36,7 @@ interface Props {
 
 export function SkuPanelItem({
   item, isSelected, isExpanded, skuImages, sessions, seekTimestamp,
-  currentSession, videoInfo, onSelectSession, onVideoInfoUpdate,
+  currentSession, videoInfo, videoControlRef, onSelectSession, onVideoInfoUpdate,
   onSelect, onToggleExpand,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -73,6 +75,29 @@ export function SkuPanelItem({
       clearLoadTimeout()
     }
   }, [clearLoadTimeout, clearPolling])
+
+  // 暴露视频控制接口给 ReviewPage（通过 ref）
+  const setPlaybackSec = useReviewStore(s => s.setPlaybackSec)
+  const setIsPlayingStore = useReviewStore(s => s.setIsPlaying)
+
+  useEffect(() => {
+    if (!videoControlRef) return
+    videoControlRef.current = {
+      play(fromSec?: number) {
+        const vid = videoRef.current
+        if (!vid) return
+        if (fromSec != null) vid.currentTime = fromSec
+        vid.play().catch(() => {})
+      },
+      pause() {
+        videoRef.current?.pause()
+      },
+      getCurrentTime() {
+        return videoRef.current?.currentTime ?? 0
+      },
+    }
+    return () => { if (videoControlRef) videoControlRef.current = null }
+  }, [videoControlRef, sourcePath])
 
   useEffect(() => {
     if (!isExpanded) return
@@ -381,10 +406,14 @@ export function SkuPanelItem({
                       setHasFrame(true)
                       setErrorMessage('')
                     }}
-                    onTimeUpdate={() => { if (!hasFrame) setHasFrame(true) }}
-                    onEnded={() => setPlaying(false)}
-                    onPause={() => setPlaying(false)}
-                    onPlay={() => setPlaying(true)}
+                    onTimeUpdate={() => {
+                      if (!hasFrame) setHasFrame(true)
+                      const vid = videoRef.current
+                      if (vid) setPlaybackSec(vid.currentTime)
+                    }}
+                    onEnded={() => { setPlaying(false); setIsPlayingStore(false) }}
+                    onPause={() => { setPlaying(false); setIsPlayingStore(false) }}
+                    onPlay={() => { setPlaying(true); setIsPlayingStore(true) }}
                     onError={onVideoError}
                   />
                   <div

@@ -10,11 +10,14 @@ import { useDragInteraction } from '@/hooks/use-drag-interaction'
 import type { TimeRange } from '@/lib/timeline-range'
 import type { CapsuleInteractionState, ReviewCapsule } from '@/types'
 
-const FRAME_W = 36
-const FRAME_H = 64
-const WAVEFORM_H = 12
+const FRAME_SIZES = [
+  { w: 36, h: 64 },   // 默认
+  { w: 54, h: 96 },
+  { w: 72, h: 128 },
+] as const
+const WAVEFORM_H = 0
 const LABEL_W = 76
-const ROW_GAP = 8
+const ROW_GAP = 24
 const BOTTOM_RESERVED = 170
 const MIN_SPAN_SEC = 2
 const AUTO_SCROLL_EDGE_PX = 24
@@ -25,6 +28,7 @@ export type ZoomLevel = '1s' | '10s' | '60s' | '2min'
 
 interface Props {
   anchorSec: number
+  playbackSec: number
   displayRange: TimeRange
   coarseRange: TimeRange
   focusRange: TimeRange
@@ -46,7 +50,7 @@ interface Props {
 interface DisplayFrame extends FrameData {
   width: number
   compressed: boolean
-  compressedGroup: 'none' | 'active'
+  compressedGroup: 'none' | 'active' | 'other'
 }
 
 type DragMode = 'create' | 'resize-start' | 'resize-end' | 'move'
@@ -142,6 +146,7 @@ function ceilTimestamp(sorted: number[], target: number): number | null {
 
 export function MultiRowTimeline({
   anchorSec,
+  playbackSec,
   displayRange,
   coarseRange,
   focusRange,
@@ -171,6 +176,10 @@ export function MultiRowTimeline({
   const pendingCreateCleanupRef = useRef<(() => void) | null>(null)
 
   const [framesPerRow, setFramesPerRow] = useState(20)
+  const [frameSizeIdx, setFrameSizeIdx] = useState(0) // 0=64h, 1=96h, 2=128h
+  const FRAME_W = FRAME_SIZES[frameSizeIdx].w
+  const FRAME_H = FRAME_SIZES[frameSizeIdx].h
+  const [zoomLevel, setZoomLevel] = useState(1) // 1s, 10s, 30s, 60s 每帧间隔
   const [layoutVersion, setLayoutVersion] = useState(0)
   const [dragging, setDragging] = useState(false)
   const [interactionState, setInteractionState] = useState<CapsuleInteractionState>('idle')
@@ -205,22 +214,30 @@ export function MultiRowTimeline({
     return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp)
   }, [frames])
 
+  // 按 zoomLevel 子采样，减少重复帧提高浏览效率
+  const zoomedFrames = useMemo(() => {
+    if (zoomLevel <= 1 || dedupedFrames.length === 0) return dedupedFrames
+    const base = dedupedFrames[0].timestamp
+    return dedupedFrames.filter(f => Math.round(f.timestamp - base) % zoomLevel === 0)
+  }, [dedupedFrames, zoomLevel])
+
   const frameInterval = useMemo(() => {
-    if (dedupedFrames.length < 2) return 1
+    if (zoomedFrames.length < 2) return Math.max(1, zoomLevel)
     let minDiff = Number.POSITIVE_INFINITY
-    for (let i = 1; i < dedupedFrames.length; i++) {
-      const diff = dedupedFrames[i].timestamp - dedupedFrames[i - 1].timestamp
+    for (let i = 1; i < zoomedFrames.length; i++) {
+      const diff = zoomedFrames[i].timestamp - zoomedFrames[i - 1].timestamp
       if (diff > 0 && diff < minDiff) minDiff = diff
     }
-    if (!Number.isFinite(minDiff)) return 1
+    if (!Number.isFinite(minDiff)) return Math.max(1, zoomLevel)
     return Math.max(1, Math.round(minDiff))
-  }, [dedupedFrames])
+  }, [zoomedFrames, zoomLevel])
 
   const activeCapsule = useMemo(
     () => capsules.find(c => c.id === activeCapsuleId) ?? null,
     [capsules, activeCapsuleId],
   )
 
+  // activeCompression 仅用于 badge 展示
   const activeCompression = useMemo(() => {
     if (!activeCapsule) return null
     const start = Math.min(activeCapsule.start_sec, activeCapsule.end_sec)
@@ -231,9 +248,21 @@ export function MultiRowTimeline({
     return { start, end, sampleInterval, frameWidth }
   }, [activeCapsule])
 
+  // 所有胶囊的压缩区域 — 确保非 active 的胶囊也保持压缩
+  const allCompressions = useMemo(() => {
+    return capsules.map(c => {
+      const start = Math.min(c.start_sec, c.end_sec)
+      const end = Math.max(c.start_sec, c.end_sec)
+      const sampleInterval = Math.max(1, Math.round(c.sample_interval_sec || 10))
+      const ratio = Math.max(0.25, Math.min(0.9, c.compression_ratio || 0.5))
+      const frameWidth = Math.max(12, Math.round(FRAME_W * ratio))
+      return { capsuleId: c.id, start, end, sampleInterval, frameWidth }
+    })
+  }, [capsules])
+
   const displayFrames = useMemo<DisplayFrame[]>(() => {
-    if (!activeCompression) {
-      return dedupedFrames.map((frame) => ({
+    if (allCompressions.length === 0) {
+      return zoomedFrames.map((frame) => ({
         ...frame,
         width: FRAME_W,
         compressed: false,
@@ -241,57 +270,55 @@ export function MultiRowTimeline({
       }))
     }
 
-    const { start, end, sampleInterval, frameWidth } = activeCompression
-    const insideAll = dedupedFrames.filter(f => f.timestamp >= start && f.timestamp <= end)
-    if (insideAll.length < 2) {
-      return dedupedFrames.map((frame) => ({
-        ...frame,
-        width: FRAME_W,
-        compressed: false,
-        compressedGroup: 'none',
-      }))
+    const result: DisplayFrame[] = []
+
+    // 为 active 胶囊用 sampleFrames（高精度），其他胶囊用 modulo 采样
+    const activeSampleSet = new Set<number>()
+    if (activeCapsuleId != null) {
+      for (const sf of sampleFrames) activeSampleSet.add(sf.timestamp)
     }
 
-    const startTs = insideAll[0].timestamp
-    const endTs = insideAll[insideAll.length - 1].timestamp
-    const before = dedupedFrames.filter(f => f.timestamp < startTs)
-    const after = dedupedFrames.filter(f => f.timestamp > endTs)
+    for (const frame of zoomedFrames) {
+      // 找到包含此帧的压缩区域（优先 active 胶囊）
+      let zone = allCompressions.find(
+        z => z.capsuleId === activeCapsuleId && frame.timestamp >= z.start && frame.timestamp <= z.end,
+      )
+      if (!zone) {
+        zone = allCompressions.find(
+          z => frame.timestamp >= z.start && frame.timestamp <= z.end,
+        )
+      }
 
-    let sampled = sampleFrames.filter(f => f.timestamp >= startTs && f.timestamp <= endTs)
-    if (sampled.length === 0) {
-      sampled = insideAll.filter((f, idx) => {
-        if (idx === 0 || idx === insideAll.length - 1) return true
-        return Math.round((f.timestamp - startTs) % sampleInterval) === 0
-      })
+      if (!zone) {
+        // 不在任何胶囊范围内 — 原始尺寸
+        result.push({ ...frame, width: FRAME_W, compressed: false, compressedGroup: 'none' })
+        continue
+      }
+
+      const isActiveZone = zone.capsuleId === activeCapsuleId
+      const relOffset = frame.timestamp - zone.start
+      const zoneSpan = zone.end - zone.start
+
+      // 首尾帧始终保留
+      const isEdge = relOffset === 0 || frame.timestamp >= zone.end
+      // active 胶囊用 sampleFrames 集合，其他用 modulo
+      const isSample = isActiveZone
+        ? activeSampleSet.has(frame.timestamp)
+        : (zoneSpan > 0 && relOffset % zone.sampleInterval === 0)
+
+      if (isEdge || isSample) {
+        result.push({
+          ...frame,
+          width: zone.frameWidth,
+          compressed: true,
+          compressedGroup: isActiveZone ? 'active' : 'other',
+        })
+      }
+      // else: 被压缩跳过
     }
 
-    const sampledMap = new Map<number, FrameData>()
-    for (const frame of sampled) sampledMap.set(frame.timestamp, frame)
-    sampledMap.set(startTs, insideAll[0])
-    sampledMap.set(endTs, insideAll[insideAll.length - 1])
-    const compressedFrames = Array.from(sampledMap.values()).sort((a, b) => a.timestamp - b.timestamp)
-
-    return [
-      ...before.map(frame => ({
-        ...frame,
-        width: FRAME_W,
-        compressed: false as const,
-        compressedGroup: 'none' as const,
-      })),
-      ...compressedFrames.map(frame => ({
-        ...frame,
-        width: frameWidth,
-        compressed: true as const,
-        compressedGroup: 'active' as const,
-      })),
-      ...after.map(frame => ({
-        ...frame,
-        width: FRAME_W,
-        compressed: false as const,
-        compressedGroup: 'none' as const,
-      })),
-    ]
-  }, [activeCompression, dedupedFrames, sampleFrames])
+    return result
+  }, [allCompressions, activeCapsuleId, zoomedFrames, sampleFrames])
 
   const frameSourceMap = useMemo(() => {
     const map = new Map<number, FrameData>()
@@ -399,9 +426,23 @@ export function MultiRowTimeline({
     const x = clientX - gridRect.left
     const y = clientY - gridRect.top
 
+    // 判断点击是否在行间距中（帧区域上方的空白）
+    // 如果是，只匹配下方行的帧，不匹配上方行
+    let clickInGap = false
+    let gapBelowRowTop = Infinity
+    for (const [, bounds] of rowBoundsRef.current) {
+      if (y < bounds.top && y >= bounds.top - ROW_GAP) {
+        clickInGap = true
+        gapBelowRowTop = bounds.top
+        break
+      }
+    }
+
     let best: FramePoint | null = null
     let bestD2 = Number.POSITIVE_INFINITY
     for (const fp of framePointsRef.current) {
+      // 在行间距中点击时，跳过上方行的帧（只匹配下方行）
+      if (clickInGap && fp.top < gapBelowRowTop) continue
       const dx = fp.cx - x
       const dy = fp.cy - y
       const d2 = dx * dx + dy * dy
@@ -755,12 +796,34 @@ export function MultiRowTimeline({
       ro.disconnect()
       window.removeEventListener('resize', updateLayout)
     }
-  }, [onViewportCapacityChange])
+  }, [onViewportCapacityChange, FRAME_W, FRAME_H])
 
+  // Ctrl+滚轮 缩放帧间隔 (1s → 10s → 30s → 60s)
+  const ZOOM_LEVELS = [1, 10, 30, 60] as const
   useEffect(() => {
-    const raf = requestAnimationFrame(() => collectFrameLayout())
+    const el = containerRef.current
+    if (!el) return undefined
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      setZoomLevel(prev => {
+        const idx = ZOOM_LEVELS.indexOf(prev as 1 | 10 | 30 | 60)
+        const cur = idx >= 0 ? idx : 0
+        const next = e.deltaY > 0 ? Math.min(ZOOM_LEVELS.length - 1, cur + 1) : Math.max(0, cur - 1)
+        return ZOOM_LEVELS[next]
+      })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // frameSizeIdx 变化后多等一帧让 DOM 更新，再重新收集布局
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      requestAnimationFrame(() => collectFrameLayout())
+    })
     return () => cancelAnimationFrame(raf)
-  }, [collectFrameLayout, rows])
+  }, [collectFrameLayout, rows, FRAME_W, FRAME_H])
 
   useEffect(() => {
     const scrollEl = scrollParentRef.current
@@ -797,7 +860,7 @@ export function MultiRowTimeline({
 
     if (target.closest('[data-capsule-handle]') || target.closest('[data-capsule-body]')) return
     if (target.closest('button,input,textarea,select')) return
-    if (!target.closest('[data-timestamp], [data-timeline-track]')) return
+    if (!target.closest('[data-timestamp], [data-timeline-track]') && target !== gridRef.current) return
 
     e.preventDefault()
 
@@ -844,11 +907,15 @@ export function MultiRowTimeline({
     e.stopPropagation()
     if (activeCapsuleId !== capsule.id) {
       setInteraction('activating')
+      // 放置白针到点击位置
+      const nearest = findNearestFrame(e.clientX, e.clientY)
+      if (nearest) onFrameSelect(nearest.timestamp)
+      // 直接激活被点击的胶囊（不依赖 findNearestFrame 的命中检测）
       onActivateCapsule(capsule.id)
       return
     }
     startCapsuleDrag(mode, capsule, e.clientX, e.clientY)
-  }, [activeCapsuleId, onActivateCapsule, setInteraction, startCapsuleDrag])
+  }, [activeCapsuleId, findNearestFrame, onActivateCapsule, onFrameSelect, setInteraction, startCapsuleDrag])
 
   return (
     <div className="space-y-2" ref={containerRef}>
@@ -866,14 +933,53 @@ export function MultiRowTimeline({
           </Badge>
         )}
 
+        {/* 帧尺寸切换 */}
+        <div className="flex items-center gap-1">
+          {FRAME_SIZES.map((sz, idx) => (
+            <button
+              key={sz.h}
+              className={`px-1.5 py-0.5 text-[10px] font-mono rounded transition-colors ${
+                frameSizeIdx === idx
+                  ? 'bg-rv-accent text-black font-bold'
+                  : 'bg-muted/50 text-muted-foreground hover:bg-muted'
+              }`}
+              onClick={() => setFrameSizeIdx(idx)}
+            >
+              {sz.h}p
+            </button>
+          ))}
+        </div>
+
+        {/* 缩放指示器 — Ctrl+滚轮切换 */}
+        <div className="flex items-center gap-1">
+          {([1, 10, 30, 60] as const).map(lvl => (
+            <button
+              key={lvl}
+              className={`px-1.5 py-0.5 text-[10px] font-mono rounded transition-colors ${
+                zoomLevel === lvl
+                  ? 'bg-rv-accent text-black font-bold'
+                  : 'bg-muted/50 text-muted-foreground hover:bg-muted'
+              }`}
+              onClick={() => setZoomLevel(lvl)}
+            >
+              {lvl}s
+            </button>
+          ))}
+        </div>
+
         <div className="flex-1" />
 
         <span className="text-[11px] text-muted-foreground font-mono">
           {formatSec(displayRange[0])} → {formatSec(displayRange[1])}
         </span>
         <span className="text-[11px] font-mono">
-          锚点 <span className="text-rv-accent">{formatSec(anchorSec)}</span>
+          <span className="text-white">▎</span>{formatSec(anchorSec)}
         </span>
+        {playbackSec > 0 && (
+          <span className="text-[11px] font-mono">
+            <span className="text-orange-400">▎</span>{formatSec(playbackSec)}
+          </span>
+        )}
       </div>
 
       <FocusRangeSlider
@@ -903,7 +1009,7 @@ export function MultiRowTimeline({
 
       <div
         ref={gridRef}
-        className="space-y-2 relative"
+        className="space-y-6 relative pt-6"
         onPointerDownCapture={handleGridPointerDownCapture}
         data-rb-fix-version={rbFixVersion}
         data-rb-diag={rbDiagEnabled ? '1' : '0'}
@@ -926,7 +1032,7 @@ export function MultiRowTimeline({
               </div>
 
               <div className="flex-1 min-w-0 relative" data-timeline-track data-row-index={rowIdx}>
-                <div className="flex" style={{ height: FRAME_H }}>
+                <div className="flex overflow-hidden" style={{ height: FRAME_H }}>
                   {rowFrames.map((frame) => (
                     <div
                       key={`frame-${rowIdx}-${frame.timestamp}-${frame.colIndex}`}
@@ -935,7 +1041,9 @@ export function MultiRowTimeline({
                       data-col-index={frame.colIndex}
                       data-compressed={frame.compressed ? '1' : '0'}
                       className={`shrink-0 cursor-pointer overflow-hidden transition-shadow ${frame.compressed
-                        ? 'ring-1 ring-emerald-400/35'
+                        ? frame.compressedGroup === 'active'
+                          ? 'ring-1 ring-emerald-400/35'
+                          : 'ring-1 ring-cyan-400/30'
                         : 'hover:ring-1 hover:ring-rv-accent/50'
                         }`}
                       style={{ width: frame.width, height: FRAME_H }}
@@ -949,7 +1057,46 @@ export function MultiRowTimeline({
                     </div>
                   ))}
                 </div>
-                <div className="bg-rv-waveform rounded-b" style={{ height: WAVEFORM_H }} />
+
+                {/* 双播放头 — 白针（锚点）+ 橙针（播放位置） */}
+                {(() => {
+                  const calcX = (sec: number) => {
+                    let x = 0
+                    for (let i = 0; i < rowFrames.length; i++) {
+                      const f = rowFrames[i]
+                      const nextTs = i + 1 < rowFrames.length ? rowFrames[i + 1].timestamp : rowEnd
+                      if (sec <= f.timestamp) break
+                      if (sec >= nextTs) { x += f.width; continue }
+                      x += f.width * ((sec - f.timestamp) / Math.max(0.1, nextTs - f.timestamp))
+                      break
+                    }
+                    return x
+                  }
+                  return (
+                    <>
+                      {/* 橙针（播放位置）— 在白针下层，空心矩形针头在帧上方 */}
+                      {playbackSec > 0 && playbackSec >= rowStart && playbackSec <= rowEnd && (
+                        <div
+                          className="absolute top-0 pointer-events-none z-[2000]"
+                          style={{ left: calcX(playbackSec), height: FRAME_H, transform: 'translateX(-50%)' }}
+                        >
+                          <div className="absolute -top-[20px] left-1/2 -translate-x-1/2 w-[10px] h-[16px] border-[3px] border-orange-400 pointer-events-auto cursor-grab" />
+                          <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-orange-400/90" />
+                        </div>
+                      )}
+                      {/* 白针（锚点/定位针）— 实心矩形针头在帧上方 */}
+                      {anchorSec >= rowStart && anchorSec <= rowEnd && (
+                        <div
+                          className="absolute top-0 pointer-events-none z-[2001]"
+                          style={{ left: calcX(anchorSec), height: FRAME_H, transform: 'translateX(-50%)' }}
+                        >
+                          <div className="absolute -top-[20px] left-1/2 -translate-x-1/2 w-[10px] h-[16px] bg-white shadow-sm pointer-events-auto cursor-grab" />
+                          <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-white/90" />
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
               </div>
 
               <div className="shrink-0 pt-1 text-right" style={{ width: LABEL_W }}>
@@ -973,9 +1120,9 @@ export function MultiRowTimeline({
                 {geo.segments.map((seg) => (
                   <div
                     key={`capsule-${geo.capsule.id}-row-${seg.row}`}
-                    className={`absolute rounded-md border transition-colors ${isActive
-                      ? 'border-emerald-300 shadow-[0_0_0_1px_rgba(16,185,129,0.65)]'
-                      : 'border-cyan-300/45'
+                    className={`absolute rounded-md border-2 transition-colors ${isActive
+                      ? 'border-emerald-400 shadow-[0_0_0_1px_rgba(16,185,129,0.65)]'
+                      : 'border-cyan-400/70'
                       }`}
                     data-capsule-segment
                     data-capsule-id={geo.capsule.id}
@@ -987,7 +1134,7 @@ export function MultiRowTimeline({
                       top: seg.top,
                       width: seg.width,
                       height: seg.height,
-                      background: isActive ? 'rgba(16, 185, 129, 0.20)' : 'rgba(100, 116, 139, 0.18)',
+                      background: isActive ? 'rgba(16, 185, 129, 0.15)' : 'rgba(0, 0, 0, 0.45)',
                     }}
                   >
                     <div
@@ -1015,7 +1162,7 @@ export function MultiRowTimeline({
                                   left: `calc(${(clamped * 100).toFixed(4)}% - ${thumbW / 2}px)`,
                                   zIndex: idx + 1,
                                   backgroundImage: `url("${sample.url}")`,
-                                  opacity: isActive ? 0.94 : 0.78,
+                                  opacity: isActive ? 0.95 : 0.6,
                                 }}
                               />
                             )

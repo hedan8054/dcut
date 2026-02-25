@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { SkuPanelItem } from './SkuPanelItem'
-import type { EnrichedPlanItem, SkuImage, SessionGroup, VideoRegistry } from '@/types'
+import type { EnrichedPlanItem, SkuImage, SessionGroup, VideoControl, VideoRegistry } from '@/types'
 
 interface Props {
   planItems: EnrichedPlanItem[]
@@ -19,6 +19,8 @@ interface Props {
   videoInfo: VideoRegistry | null
   /** 切换场次 */
   onSelectSession: (session: SessionGroup) => void
+  /** 视频控制 ref — 暴露 play/pause 给 ReviewPage */
+  videoControlRef?: React.MutableRefObject<VideoControl | null>
   /** 更新当前视频信息（如代理生成后） */
   onVideoInfoUpdate: (video: VideoRegistry) => void
   onSelectSku: (code: string) => void
@@ -44,7 +46,7 @@ function getSavedWidth(): number {
 export function SkuPanel({
   planItems, planLoading, skuImages, sessions,
   currentSkuCode, expandedSkuCode, seekTimestamp,
-  currentSession, videoInfo, onSelectSession,
+  currentSession, videoInfo, videoControlRef, onSelectSession,
   onVideoInfoUpdate,
   onSelectSku, onToggleExpand,
 }: Props) {
@@ -123,6 +125,7 @@ export function SkuPanel({
                 seekTimestamp={seekTimestamp}
                 currentSession={currentSession}
                 videoInfo={videoInfo}
+                videoControlRef={videoControlRef}
                 onSelectSession={onSelectSession}
                 onVideoInfoUpdate={onVideoInfoUpdate}
                 onSelect={onSelectSku}

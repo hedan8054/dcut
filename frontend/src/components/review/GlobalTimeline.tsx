@@ -10,6 +10,7 @@ interface Props {
   videoDuration: number
   leadTimestamps: number[]
   currentCenter: number
+  playbackSec: number
   zoomLevel: ZoomLevel
   coarseRange: TimeRange
   focusRange: TimeRange
@@ -37,6 +38,7 @@ export function GlobalTimeline({
   videoDuration,
   leadTimestamps,
   currentCenter,
+  playbackSec,
   zoomLevel,
   coarseRange,
   focusRange,
@@ -229,10 +231,25 @@ export function GlobalTimeline({
           title="1秒精查范围"
         />
 
+        {/* 橙针（播放位置） */}
+        {playbackSec > 0 && (
+          <div
+            className="absolute top-0 bottom-0 pointer-events-none z-38"
+            style={{ left: secToPct(playbackSec), transform: 'translateX(-50%)' }}
+          >
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[7px] border-l-transparent border-r-transparent border-t-orange-400" />
+            <div className="absolute top-[7px] bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-orange-400/90" />
+          </div>
+        )}
+
+        {/* 白针（锚点/定位针） */}
         <div
-          className="absolute top-0 bottom-0 w-0.5 bg-rv-accent z-40 pointer-events-none"
-          style={{ left: secToPct(currentCenter) }}
-        />
+          className="absolute top-0 bottom-0 pointer-events-none z-40"
+          style={{ left: secToPct(currentCenter), transform: 'translateX(-50%)' }}
+        >
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[7px] border-l-transparent border-r-transparent border-t-white" />
+          <div className="absolute top-[7px] bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-white/90" />
+        </div>
 
         {hoverX !== null && hoverSec !== null && (
           <>

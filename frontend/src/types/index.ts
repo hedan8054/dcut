@@ -86,6 +86,13 @@ export interface VerifiedClip {
 }
 
 export type CapsuleInteractionState = 'idle' | 'activating' | 'dragging'
+
+/** 视频播放器的命令式控制接口 — 通过 ref 暴露给 ReviewPage */
+export interface VideoControl {
+  play(fromSec?: number): void
+  pause(): void
+  getCurrentTime(): number
+}
 export type ReviewCapsuleStatus = 'draft' | 'bound' | 'final'
 export type ReviewCapsuleDisplayMode = 'compressed'
 

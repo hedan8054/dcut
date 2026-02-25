@@ -258,6 +258,9 @@ export function useCapsuleManager({
   }, [activeCapsuleId, capsules, dryrun, setMode, showUiHint])
 
   const handleFrameSelect = useCallback((timestamp: number) => {
+    // 无论是否命中胶囊，总是设置白针（锚点）
+    setAnchorSec(timestamp)
+
     const hit = [...capsules]
       .filter(c => timestamp >= c.start_sec && timestamp <= c.end_sec)
       .sort((a, b) => b.z_index - a.z_index)[0]
@@ -267,7 +270,6 @@ export function useCapsuleManager({
       return
     }
 
-    setAnchorSec(timestamp)
     showUiHint('该位置无胶囊，按 N 键快速创建 10 秒胶囊', 1200)
   }, [activateCapsule, capsules, setAnchorSec, showUiHint])
 
