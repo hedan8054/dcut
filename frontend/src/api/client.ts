@@ -265,11 +265,12 @@ export function batchFrames(data: {
   timestamps: number[]
   w?: number
   h?: number
-}) {
+}, signal?: AbortSignal) {
   return request<{ frames: { timestamp: number; url: string }[] }>('/api/video/frames', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
+    signal,
   })
 }
 

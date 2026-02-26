@@ -58,3 +58,55 @@ export function clampFocusIntoCoarse(
   return clampRange(next, duration, minSpan)
 }
 
+export interface ExpandResult {
+  focus: TimeRange
+  coarse: TimeRange
+  /** 是否撞到视频绝对边界 (0 或 duration) */
+  hitBoundary: boolean
+}
+
+/**
+ * 单方向扩展 focus，必要时同步扩展 coarse（白不越橙）。
+ *
+ * direction='right' → focus[1] += deltaSec，coarse[1] 跟扩
+ * direction='left'  → focus[0] -= deltaSec，coarse[0] 跟扩
+ *
+ * 硬边界: clamp 到 [0, duration]。
+ */
+export function expandFocusOneDirection(
+  focus: TimeRange,
+  coarse: TimeRange,
+  direction: 'left' | 'right',
+  deltaSec: number,
+  duration: number,
+  minFocusSpan: number,
+): ExpandResult {
+  let [fs, fe] = focus
+  let [cs, ce] = coarse
+  let hitBoundary = false
+
+  if (direction === 'right') {
+    fe += deltaSec
+    if (fe >= duration) { fe = duration; hitBoundary = true }
+    // 白不越橙: focus 右边界不能超 coarse 右边界
+    if (fe > ce) ce = fe
+  } else {
+    fs -= deltaSec
+    if (fs <= 0) { fs = 0; hitBoundary = true }
+    // 白不越橙: focus 左边界不能小于 coarse 左边界
+    if (fs < cs) cs = fs
+  }
+
+  // 确保 focus 最小跨度
+  if (fe - fs < minFocusSpan) {
+    if (direction === 'right') fe = Math.min(duration, fs + minFocusSpan)
+    else fs = Math.max(0, fe - minFocusSpan)
+  }
+
+  // 最终 clamp
+  const nextFocus = clampRange([fs, fe], duration, minFocusSpan)
+  const nextCoarse = clampRange([cs, ce], duration, minFocusSpan)
+
+  return { focus: nextFocus, coarse: nextCoarse, hitBoundary }
+}
+

@@ -150,7 +150,7 @@ export function useCapsuleGeometry({
         const segEndTs = row === endPoint.row ? normalizedEnd : points[points.length - 1].timestamp
 
         const sampleCandidates = sampleFrames
-          .filter(f => f.timestamp >= segStartTs && f.timestamp <= segEndTs)
+          .filter(f => f.timestamp >= segStartTs && f.timestamp <= segEndTs && !!f.url)
           .slice(0, 120)
         const sampleMap = new Map<number, FrameData>()
         for (const frame of sampleCandidates) sampleMap.set(frame.timestamp, frame)

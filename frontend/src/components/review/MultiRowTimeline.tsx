@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Monitor } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { FocusRangeSlider } from './FocusRangeSlider'
@@ -45,6 +45,18 @@ interface Props {
   onActivateCapsule: (capsuleId: number) => void
   onInteractionStateChange?: (state: CapsuleInteractionState) => void
   onViewportCapacityChange?: (capacity: number) => void
+  /** 自动扩窗: 每帧检测拖拽点距边界的像素距离 */
+  onEdgeHitCheck?: (distPx: number, direction: 'left' | 'right') => void
+  /** 自动扩窗: 拖拽结束时停止 */
+  onEdgeDragStop?: () => void
+  /** 自动扩窗: 当前发光方向 */
+  edgeGlowSide?: 'left' | 'right' | null
+  /** 自动扩窗: 是否已撞到视频绝对边界 */
+  edgeHitBoundary?: boolean
+  /** 自动扩窗: 贴边预备态（在热区但还没到 300ms） */
+  edgePreExpand?: boolean
+  /** 自动扩窗: 当前步长 10/20/30 或 null */
+  edgeCurrentStep?: number | null
 }
 
 interface DisplayFrame extends FrameData {
@@ -67,6 +79,8 @@ interface DragState {
   originSnapTs?: number
   currentStart?: number
   currentEnd?: number
+  /** 滚动补偿锚点: 当前拖拽端点的帧时间戳 */
+  activeAnchorTs?: number
 }
 
 interface RubberBandInfo {
@@ -163,6 +177,12 @@ export function MultiRowTimeline({
   onActivateCapsule,
   onInteractionStateChange,
   onViewportCapacityChange,
+  onEdgeHitCheck,
+  onEdgeDragStop,
+  edgeGlowSide,
+  edgeHitBoundary,
+  edgePreExpand,
+  edgeCurrentStep,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
@@ -497,6 +517,10 @@ export function MultiRowTimeline({
       originSnapTs: nearest.timestamp,
       currentStart: baseStart,
       currentEnd: baseEnd,
+      // 拖拽端点锚定: resize-start=左手柄, resize-end=右手柄, move=鼠标位置
+      activeAnchorTs: mode === 'resize-start' ? nearestTimestamp(sortedTimestampsRef.current, baseStart) ?? nearest.timestamp
+        : mode === 'resize-end' ? nearestTimestamp(sortedTimestampsRef.current, baseEnd) ?? nearest.timestamp
+        : nearest.timestamp,
     }
     setDragPreview({ capsuleId: capsule.id, start: baseStart, end: baseEnd })
     setDragTimeHint({
@@ -565,25 +589,40 @@ export function MultiRowTimeline({
     }
 
     if (ds.capsuleId == null || ds.originStart == null || ds.originEnd == null || ds.originSnapTs == null) return
-    const nearest = findNearestFrame(clientX, clientY)
-    if (!nearest) return
-
-    setDiagSnapTarget(nearest.timestamp)
 
     const sorted = sortedTimestampsRef.current
     if (sorted.length < 2) return
     const minTs = sorted[0]
     const maxTs = sorted[sorted.length - 1]
 
+    // nearest 可能为 null（指针越过所有帧区域），后续按 mode fallback
+    const nearest = findNearestFrame(clientX, clientY)
+    if (nearest) setDiagSnapTarget(nearest.timestamp)
+
+    // 获取 track rect 的辅助函数（优先用命中行，fallback 到首个 track）
+    const getTrackRect = () => {
+      const grid = gridRef.current
+      if (!grid) return null
+      if (nearest) {
+        const rowTrack = grid.querySelector(`[data-timeline-track][data-row-index="${nearest.row}"]`)
+        if (rowTrack) return rowTrack.getBoundingClientRect()
+      }
+      const anyTrack = grid.querySelector('[data-timeline-track]')
+      return anyTrack?.getBoundingClientRect() ?? null
+    }
+
     if (ds.mode === 'resize-start') {
+      // nearest 为 null → 指针在帧区域外，fallback 到最小 ts（最激进的左扩）
+      const nearestTs = nearest?.timestamp ?? minTs
       const maxAllowed = ds.originEnd - MIN_SPAN_SEC
-      const clamped = Math.min(nearest.timestamp, maxAllowed)
+      const clamped = Math.min(nearestTs, maxAllowed)
       const floor = floorTimestamp(sorted, clamped)
       const fallback = nearestTimestamp(sorted, clamped)
       const nextStart = floor ?? fallback
       if (nextStart == null) return
       ds.currentStart = nextStart
       ds.currentEnd = ds.originEnd
+      ds.activeAnchorTs = nextStart
       updateDragPreview(ds.capsuleId, nextStart, ds.originEnd)
       setDragTimeHint({
         capsuleId: ds.capsuleId,
@@ -591,18 +630,26 @@ export function MultiRowTimeline({
         startSec: nextStart,
         endSec: ds.originEnd,
       })
+      // 自动扩窗: 基于指针到帧轨道(track)边缘的真实几何距离
+      if (onEdgeHitCheck) {
+        const rect = getTrackRect()
+        if (rect) onEdgeHitCheck(clientX - rect.left, 'left')
+      }
       return
     }
 
     if (ds.mode === 'resize-end') {
+      // nearest 为 null → fallback 到最大 ts（最激进的右扩）
+      const nearestTs = nearest?.timestamp ?? maxTs
       const minAllowed = ds.originStart + MIN_SPAN_SEC
-      const clamped = Math.max(nearest.timestamp, minAllowed)
+      const clamped = Math.max(nearestTs, minAllowed)
       const ceil = ceilTimestamp(sorted, clamped)
       const fallback = nearestTimestamp(sorted, clamped)
       const nextEnd = ceil ?? fallback
       if (nextEnd == null) return
       ds.currentStart = ds.originStart
       ds.currentEnd = nextEnd
+      ds.activeAnchorTs = nextEnd
       updateDragPreview(ds.capsuleId, ds.originStart, nextEnd)
       setDragTimeHint({
         capsuleId: ds.capsuleId,
@@ -610,6 +657,27 @@ export function MultiRowTimeline({
         startSec: ds.originStart,
         endSec: nextEnd,
       })
+      // 自动扩窗: 基于指针到帧轨道(track)边缘的真实几何距离
+      if (onEdgeHitCheck) {
+        const rect = getTrackRect()
+        if (rect) onEdgeHitCheck(rect.right - clientX, 'right')
+      }
+      return
+    }
+
+    // move 模式: nearest 为 null 时无法计算 rawDelta，仅触发边缘检测
+    if (!nearest) {
+      if (onEdgeHitCheck) {
+        const rect = getTrackRect()
+        if (rect) {
+          const moveDelta = (ds.currentStart ?? ds.originStart) - ds.originStart
+          if (moveDelta <= 0) {
+            onEdgeHitCheck(clientX - rect.left, 'left')
+          } else {
+            onEdgeHitCheck(rect.right - clientX, 'right')
+          }
+        }
+      }
       return
     }
 
@@ -639,6 +707,7 @@ export function MultiRowTimeline({
 
     ds.currentStart = finalStart
     ds.currentEnd = finalEnd
+    ds.activeAnchorTs = nearest.timestamp
     updateDragPreview(ds.capsuleId, finalStart, finalEnd)
     setDragTimeHint({
       capsuleId: ds.capsuleId,
@@ -646,7 +715,20 @@ export function MultiRowTimeline({
       startSec: finalStart,
       endSec: finalEnd,
     })
-  }, [findNearestFrame, getNearestTimestamp, updateDragPreview])
+
+    // 自动扩窗: 基于指针到帧轨道(track)边缘的真实几何距离
+    if (onEdgeHitCheck && ds.currentStart != null && ds.currentEnd != null) {
+      const rect = getTrackRect()
+      if (rect) {
+        const moveDelta = ds.currentStart - (ds.originStart ?? ds.currentStart)
+        if (moveDelta <= 0) {
+          onEdgeHitCheck(clientX - rect.left, 'left')
+        } else {
+          onEdgeHitCheck(rect.right - clientX, 'right')
+        }
+      }
+    }
+  }, [findNearestFrame, getNearestTimestamp, updateDragPreview, onEdgeHitCheck])
 
   const finishDrag = useCallback((clientX: number, clientY: number) => {
     const ds = dragRef.current
@@ -654,6 +736,7 @@ export function MultiRowTimeline({
     setDragging(false)
     setInteraction('idle')
     setDiagAutoScroll(null)
+    onEdgeDragStop?.()
 
     if (!ds) {
       setRubberBand(null)
@@ -840,6 +923,49 @@ export function MultiRowTimeline({
     scrollEl.addEventListener('scroll', onScroll, { passive: true })
     return () => scrollEl.removeEventListener('scroll', onScroll)
   }, [collectFrameLayout, layoutVersion])
+
+  // --- 滚动补偿: 拖拽期间扩窗导致帧增减时保持被拖拽端点视觉稳定 ---
+  const scrollAnchorRef = useRef<{ ts: number; y: number } | null>(null)
+
+  useLayoutEffect(() => {
+    const grid = gridRef.current
+    const ds = dragRef.current
+    // 仅在胶囊拖拽（非框选创建）期间启用
+    if (!grid || !ds || ds.mode === 'create') {
+      scrollAnchorRef.current = null
+      return
+    }
+
+    const anchorTs = ds.activeAnchorTs
+    if (anchorTs == null) { scrollAnchorRef.current = null; return }
+
+    // 补偿: 如果存储的锚帧时间戳和当前一致，说明用户端点没动，布局可能漂移了
+    if (scrollAnchorRef.current && scrollAnchorRef.current.ts === anchorTs) {
+      const el = grid.querySelector(`[data-timestamp="${anchorTs}"]`) as HTMLElement | null
+      if (el && scrollParentRef.current) {
+        const newY = el.getBoundingClientRect().top
+        const delta = newY - scrollAnchorRef.current.y
+        if (Math.abs(delta) > 1) {
+          scrollParentRef.current.scrollTop += delta
+        }
+      }
+    }
+
+    // 存储当前锚帧位置，供下一轮比较
+    const el = grid.querySelector(`[data-timestamp="${anchorTs}"]`) as HTMLElement | null
+    if (el) {
+      scrollAnchorRef.current = { ts: anchorTs, y: el.getBoundingClientRect().top }
+    } else {
+      // 锚点时间戳可能没有精确匹配的帧元素，查找最近的
+      const nearest = nearestTimestamp(sortedTimestampsRef.current, anchorTs)
+      if (nearest != null) {
+        const nearEl = grid.querySelector(`[data-timestamp="${nearest}"]`) as HTMLElement | null
+        if (nearEl) {
+          scrollAnchorRef.current = { ts: nearest, y: nearEl.getBoundingClientRect().top }
+        }
+      }
+    }
+  }, [rows])
 
   const { capsuleGeometries } = useCapsuleGeometry({
     capsules,
@@ -1033,29 +1159,42 @@ export function MultiRowTimeline({
 
               <div className="flex-1 min-w-0 relative" data-timeline-track data-row-index={rowIdx}>
                 <div className="flex overflow-hidden" style={{ height: FRAME_H }}>
-                  {rowFrames.map((frame) => (
-                    <div
-                      key={`frame-${rowIdx}-${frame.timestamp}-${frame.colIndex}`}
-                      data-timestamp={frame.timestamp}
-                      data-row-index={rowIdx}
-                      data-col-index={frame.colIndex}
-                      data-compressed={frame.compressed ? '1' : '0'}
-                      className={`shrink-0 cursor-pointer overflow-hidden transition-shadow ${frame.compressed
-                        ? frame.compressedGroup === 'active'
-                          ? 'ring-1 ring-emerald-400/35'
-                          : 'ring-1 ring-cyan-400/30'
-                        : 'hover:ring-1 hover:ring-rv-accent/50'
-                        }`}
-                      style={{ width: frame.width, height: FRAME_H }}
-                      draggable={false}
-                      title={formatSec(frame.timestamp)}
-                    >
+                  {rowFrames.map((frame) => {
+                    // 锚点稳定标记: 拖拽手柄所在帧加绿色边框
+                    const isAnchor = dragTimeHint
+                      && ((dragTimeHint.mode === 'resize-start' && frame.timestamp === dragTimeHint.startSec)
+                        || (dragTimeHint.mode === 'resize-end' && frame.timestamp === dragTimeHint.endSec))
+                    return (
                       <div
-                        className="w-full h-full bg-cover bg-center bg-no-repeat pointer-events-none select-none"
-                        style={{ backgroundImage: `url("${frame.url}")` }}
-                      />
-                    </div>
-                  ))}
+                        key={`frame-${rowIdx}-${frame.timestamp}-${frame.colIndex}`}
+                        data-timestamp={frame.timestamp}
+                        data-row-index={rowIdx}
+                        data-col-index={frame.colIndex}
+                        data-compressed={frame.compressed ? '1' : '0'}
+                        className={`shrink-0 cursor-pointer overflow-hidden transition-shadow ${
+                          isAnchor
+                            ? 'ring-2 ring-emerald-400 z-10'
+                            : frame.compressed
+                              ? frame.compressedGroup === 'active'
+                                ? 'ring-1 ring-emerald-400/35'
+                                : 'ring-1 ring-cyan-400/30'
+                              : 'hover:ring-1 hover:ring-rv-accent/50'
+                        }`}
+                        style={{ width: frame.width, height: FRAME_H }}
+                        draggable={false}
+                        title={formatSec(frame.timestamp)}
+                      >
+                        {frame.url ? (
+                          <div
+                            className="w-full h-full bg-cover bg-center bg-no-repeat pointer-events-none select-none animate-frame-appear"
+                            style={{ backgroundImage: `url("${frame.url}")` }}
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-[#1A1D24] animate-pulse pointer-events-none select-none" />
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
 
                 {/* 双播放头 — 白针（锚点）+ 橙针（播放位置） */}
@@ -1120,9 +1259,11 @@ export function MultiRowTimeline({
                 {geo.segments.map((seg) => (
                   <div
                     key={`capsule-${geo.capsule.id}-row-${seg.row}`}
-                    className={`absolute rounded-md border-2 transition-colors ${isActive
-                      ? 'border-emerald-400 shadow-[0_0_0_1px_rgba(16,185,129,0.65)]'
-                      : 'border-cyan-400/70'
+                    className={`absolute rounded-md border-2 ${isActive
+                      ? 'border-emerald-400'
+                      : geo.capsule.status !== 'draft'
+                        ? 'border-emerald-600/60 transition-colors'
+                        : 'border-cyan-400/70 transition-colors'
                       }`}
                     data-capsule-segment
                     data-capsule-id={geo.capsule.id}
@@ -1134,7 +1275,12 @@ export function MultiRowTimeline({
                       top: seg.top,
                       width: seg.width,
                       height: seg.height,
-                      background: isActive ? 'rgba(16, 185, 129, 0.15)' : 'rgba(0, 0, 0, 0.45)',
+                      background: isActive
+                        ? 'rgba(16, 185, 129, 0.15)'
+                        : geo.capsule.status !== 'draft'
+                          ? 'rgba(16, 185, 129, 0.08)'
+                          : 'rgba(0, 0, 0, 0.18)',
+                      animation: isActive ? 'capsule-glow 2s ease-in-out infinite' : undefined,
                     }}
                   >
                     <div
@@ -1148,28 +1294,42 @@ export function MultiRowTimeline({
                       title={`${formatSec(geo.startTs)} - ${formatSec(geo.endTs)}`}
                     >
                       <div className="absolute inset-0 overflow-hidden">
-                        {seg.samples.length > 0 ? (
-                          seg.samples.map((sample, idx) => {
-                            const segSpan = Math.max(1, seg.endTs - seg.startTs)
-                            const ratioPos = segSpan <= 0 ? 0 : (sample.timestamp - seg.startTs) / segSpan
-                            const clamped = Math.max(0, Math.min(1, ratioPos))
-                            return (
-                              <div
-                                key={`sample-${geo.capsule.id}-${seg.row}-${sample.timestamp}`}
-                                className="absolute top-[4%] h-[92%] rounded-sm border border-white/15 bg-cover bg-center"
-                                style={{
-                                  width: thumbW,
-                                  left: `calc(${(clamped * 100).toFixed(4)}% - ${thumbW / 2}px)`,
-                                  zIndex: idx + 1,
-                                  backgroundImage: `url("${sample.url}")`,
-                                  opacity: isActive ? 0.95 : 0.6,
-                                }}
-                              />
-                            )
-                          })
-                        ) : (
-                          <div className="absolute inset-0 bg-emerald-500/10" />
-                        )}
+                        {isActive && seg.samples.length > 0 ? (
+                          (() => {
+                            // 按 timestamp 映射 x 坐标定位（禁止等距铺开）
+                            const pad = thumbW / 2
+                            const usable = seg.width - pad * 2
+                            const maxThumbs = Math.max(1, Math.floor(usable / thumbW) + 1)
+                            const step = seg.samples.length <= maxThumbs
+                              ? 1
+                              : seg.samples.length / maxThumbs
+                            const visible = seg.samples.length <= maxThumbs
+                              ? seg.samples
+                              : Array.from({ length: maxThumbs }, (_, i) =>
+                                  seg.samples[Math.min(Math.round(i * step), seg.samples.length - 1)]
+                                )
+                            const spanTs = seg.endTs - seg.startTs
+                            return visible.map((sample, idx) => {
+                              // 按 timestamp 定位：同源于底层帧时间坐标
+                              const timePos = spanTs > 0
+                                ? (sample.timestamp - seg.startTs) / spanTs
+                                : 0.5
+                              return (
+                                <div
+                                  key={`sample-${geo.capsule.id}-${seg.row}-${sample.timestamp}`}
+                                  className="absolute top-[4%] h-[92%] rounded-sm border border-white/15 bg-cover bg-center"
+                                  style={{
+                                    width: thumbW,
+                                    left: pad + timePos * usable - thumbW / 2,
+                                    zIndex: idx + 1,
+                                    backgroundImage: `url("${sample.url}")`,
+                                    opacity: 0.95,
+                                  }}
+                                />
+                              )
+                            })
+                          })()
+                        ) : null}
                       </div>
 
                       <div className="absolute left-1 top-1 flex items-center gap-1 pointer-events-none">
@@ -1236,6 +1396,47 @@ export function MultiRowTimeline({
             )
           })}
         </div>
+
+        {/* 自动扩窗边缘发光 — 3 个可感知状态 */}
+        {edgeGlowSide && (
+          <div
+            className={`absolute top-0 bottom-0 pointer-events-none z-[60] flex items-center ${
+              edgeGlowSide === 'left' ? 'left-0 justify-start pl-1' : 'right-0 justify-end pr-1'
+            }`}
+            style={{
+              width: edgeHitBoundary ? 50 : edgeCurrentStep ? 40 : 30,
+              background: edgeHitBoundary
+                ? (edgeGlowSide === 'left'
+                  ? 'linear-gradient(to right, rgba(239, 68, 68, 0.35), transparent)'
+                  : 'linear-gradient(to left, rgba(239, 68, 68, 0.35), transparent)')
+                : edgeCurrentStep
+                  ? (edgeGlowSide === 'left'
+                    ? 'linear-gradient(to right, rgba(255, 132, 0, 0.3), transparent)'
+                    : 'linear-gradient(to left, rgba(255, 132, 0, 0.3), transparent)')
+                  : (edgeGlowSide === 'left'
+                    ? 'linear-gradient(to right, rgba(255, 132, 0, 0.15), transparent)'
+                    : 'linear-gradient(to left, rgba(255, 132, 0, 0.15), transparent)'),
+            }}
+          >
+            {/* 状态文字 */}
+            {edgeHitBoundary ? (
+              <span className="text-[9px] text-red-300/80 whitespace-nowrap leading-tight"
+                style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
+                已到边界
+              </span>
+            ) : edgeCurrentStep ? (
+              <span key={edgeCurrentStep} className="text-[10px] font-mono text-orange-300 whitespace-nowrap animate-step-pop"
+                style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
+                +{edgeCurrentStep}s
+              </span>
+            ) : edgePreExpand ? (
+              <span className="text-[9px] text-orange-300/50 whitespace-nowrap leading-tight"
+                style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
+                0.3s扩展
+              </span>
+            ) : null}
+          </div>
+        )}
 
         {rubberBand && (
           <>

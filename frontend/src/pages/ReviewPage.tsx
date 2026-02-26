@@ -12,12 +12,16 @@ import {
 import { SkuPanel } from '@/components/review/SkuPanel'
 import { SessionTopBar } from '@/components/review/SessionTopBar'
 import { GlobalTimeline } from '@/components/review/GlobalTimeline'
+import { ProgressBar } from '@/components/review/ProgressBar'
+import { MinimapPanel, getInitialPinned } from '@/components/review/MinimapPanel'
 import { MultiRowTimeline } from '@/components/review/MultiRowTimeline'
 import { AnnotationBar } from '@/components/review/AnnotationBar'
 import { NasScanPanel } from '@/components/review/NasScanPanel'
 import { useCapsuleManager } from '@/hooks/use-capsule-manager'
 import { useClipSearch } from '@/hooks/use-clip-search'
 import { useMultiResFrames } from '@/hooks/use-multi-res-frames'
+import { useAutoExpand } from '@/hooks/use-auto-expand'
+import { useUndoStack } from '@/hooks/use-undo-stack'
 import { useUiHint } from '@/hooks/use-ui-hint'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,6 +31,7 @@ import { formatSec, formatDuration } from '@/lib/format'
 import {
   clampFocusIntoCoarse,
   clampRange,
+  expandFocusOneDirection,
   makeCenteredRange,
   rangeCenter,
   rangeSpan,
@@ -106,6 +111,7 @@ export default function ReviewPage() {
   const [skuImages, setSkuImages] = useState<SkuImage[]>([])
   const [allVideos, setAllVideos] = useState<VideoRegistry[]>([])
   const [showVideoManager, setShowVideoManager] = useState(false)
+  const [immersive, setImmersive] = useState(false)
   const [regDate, setRegDate] = useState('')
   const [regPath, setRegPath] = useState('')
   const [regLabel, setRegLabel] = useState('')
@@ -113,6 +119,14 @@ export default function ReviewPage() {
   const [coarseRange, setCoarseRange] = useState<TimeRange>([0, 0])
   const [focusRange, setFocusRange] = useState<TimeRange>([0, 0])
   const [, setTimelineCapacity] = useState(40)
+  const [minimapOpen, setMinimapOpen] = useState(false)
+  const [, setMinimapPinned] = useState(getInitialPinned)
+
+  // 用 ref 存 focusRange/coarseRange 供高频回调使用（避免闭包过期）
+  const focusRangeRef = useRef(focusRange)
+  focusRangeRef.current = focusRange
+  const coarseRangeRef = useRef(coarseRange)
+  coarseRangeRef.current = coarseRange
 
   const videoPath = useMemo(() => {
     if (!videoInfo) return ''
@@ -121,7 +135,6 @@ export default function ReviewPage() {
   const videoId = videoInfo?.id
   const videoDuration = videoInfo?.duration_sec || 4 * 3600
   const leadTimestamps = useMemo(() => parseLeadTimestamps(sessionLeads), [sessionLeads])
-  const activeRange: TimeRange = focusRange
 
   const framesHook = useMultiResFrames(videoDuration)
   const {
@@ -160,6 +173,35 @@ export default function ReviewPage() {
   const [searchParams] = useSearchParams()
   const capsuleDryrun = useMemo(() => searchParams.get('capsule_dryrun') === '1', [searchParams])
   const { hint: uiHint, show: showUiHint } = useUiHint()
+
+  /** 自动扩窗回调 — 由 useAutoExpand hook 在贴边延迟后调用 */
+  const handleAutoExpand = useCallback((direction: 'left' | 'right', deltaSec: number) => {
+    const result = expandFocusOneDirection(
+      focusRangeRef.current, coarseRangeRef.current,
+      direction, deltaSec, videoDuration, FOCUS_MIN_SPAN_SEC,
+    )
+    setFocusRange(result.focus)
+    setCoarseRange(result.coarse)
+    // 立即同步 ref，避免高频连续调用时闭包过期
+    focusRangeRef.current = result.focus
+    coarseRangeRef.current = result.coarse
+    // 预取扩展范围的帧（L2 粗帧 + L3 焦点区精细帧）
+    if (videoPath) {
+      extendRange(videoPath, videoId, 'L2', result.coarse[0], result.coarse[1], 10)
+      extendRange(videoPath, videoId, 'L3', result.focus[0], result.focus[1])
+    }
+    if (result.hitBoundary) {
+      showUiHint('已到视频边界', 500, 'warning')
+    }
+    return result
+  }, [videoDuration, videoPath, videoId, extendRange, showUiHint])
+
+  const autoExpand = useAutoExpand({
+    videoDuration,
+    minFocusSpan: FOCUS_MIN_SPAN_SEC,
+    onExpand: handleAutoExpand,
+  })
+
   const { results: clipResults, searching: clipSearching, search: handleClipSearch, clear: clearClipResults } = useClipSearch(videoInfo, skuImages)
 
   const {
@@ -193,9 +235,42 @@ export default function ReviewPage() {
     showUiHint,
   })
 
+  // --- 双栈 Undo (Sprint 4.1) ---
+  const editStack = useUndoStack<{
+    capsuleId: number
+    before: { start_sec: number; end_sec: number }
+    after: { start_sec: number; end_sec: number }
+  }>()
+  const viewportStack = useUndoStack<TimeRange>()
+
+  /** 胶囊几何更新 + 编辑栈推入（before/after 对） */
+  const handleUpdateWithUndo = useCallback((capsuleId: number, patch: { start_sec?: number; end_sec?: number }) => {
+    const current = capsules.find(c => c.id === capsuleId)
+    if (current) {
+      editStack.push({
+        capsuleId,
+        before: { start_sec: current.start_sec, end_sec: current.end_sec },
+        after: {
+          start_sec: patch.start_sec ?? current.start_sec,
+          end_sec: patch.end_sec ?? current.end_sec,
+        },
+      })
+    }
+    return handleUpdateCapsuleGeometry(capsuleId, patch)
+  }, [capsules, editStack, handleUpdateCapsuleGeometry])
+
+  /** 胶囊交互状态变化 — 拖拽开始时入 viewport 栈 */
+  const handleInteractionStateChange = useCallback((state: import('@/types').CapsuleInteractionState) => {
+    setCapsuleInteractionState(state)
+    if (state === 'dragging') {
+      // 拖拽会话级: 整个拖拽的所有 auto-expand 只算一条 viewport undo 记录
+      viewportStack.push([...focusRangeRef.current] as TimeRange)
+    }
+  }, [setCapsuleInteractionState, viewportStack])
+
   useEffect(() => {
-    setViewRange(activeRange)
-  }, [activeRange, setViewRange])
+    setViewRange(focusRange)
+  }, [focusRange, setViewRange])
 
   useEffect(() => {
     if (!videoPath) return
@@ -204,10 +279,20 @@ export default function ReviewPage() {
 
   useEffect(() => {
     fetchTodayPlan()
-      .then(ep => setPlanItems(ep?.items ?? []))
+      .then(ep => {
+        const items = ep?.items ?? []
+        setPlanItems(items)
+        // SKU 列表默认展开第一个（或 URL 参数指定的）
+        if (items.length > 0 && !expandedSkuCode) {
+          const target = searchParams.get('sku')?.toUpperCase()
+          const code = items.find(i => i.sku_code === target)?.sku_code ?? items[0].sku_code
+          setCurrentSkuCode(code)
+          setExpandedSkuCode(code)
+        }
+      })
       .catch(console.error)
       .finally(() => setPlanLoading(false))
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps -- 只在首次加载时执行
 
   useEffect(() => {
     fetchVideoRegistry().then(setAllVideos).catch(console.error)
@@ -387,9 +472,62 @@ export default function ReviewPage() {
     }
   }, [regDate, regPath, regLabel])
 
+  // Enter 保存: AnnotationBar 通过 saveRef 暴露 handleSave
+  const annotationSaveRef = useRef<(() => Promise<void>) | null>(null)
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // Space 键优先级最高：除 INPUT/TEXTAREA 外一律强制走播放控制
+      // 这样即使焦点在 AnnotationBar 的 <Button> 上也不会误触按钮
+      if (e.key === ' ' || e.code === 'Space') {
+        if (e.target instanceof HTMLElement) {
+          const tag = e.target.tagName
+          if (tag === 'INPUT' || tag === 'TEXTAREA') return
+        }
+        if (!videoPath) return
+        e.preventDefault()
+        const vc = videoControlRef.current
+        if (!vc) return
+        if (isPlaying) {
+          vc.pause()
+        } else if (e.shiftKey) {
+          vc.play(playbackSec)
+        } else {
+          vc.play(anchorSec)
+        }
+        return
+      }
+
       if (isEditableTarget(e.target)) return
+
+      // Ctrl+Z = 编辑栈 undo；Ctrl+Shift+Z = 编辑栈 redo；Alt+Z = 视窗栈 undo
+      if (e.key === 'z' || e.key === 'Z') {
+        if (e.altKey && !e.ctrlKey && !e.metaKey) {
+          // Alt+Z: viewport undo
+          e.preventDefault()
+          const prev = viewportStack.undo()
+          if (prev) setFocusRange(prev)
+          return
+        }
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
+          // Ctrl+Shift+Z: edit redo — 恢复到撤销前的新几何
+          e.preventDefault()
+          const entry = editStack.redo()
+          if (entry) {
+            void handleUpdateCapsuleGeometry(entry.capsuleId, entry.after)
+          }
+          return
+        }
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+          // Ctrl+Z: edit undo — 恢复胶囊旧几何，不跳视窗
+          e.preventDefault()
+          const entry = editStack.undo()
+          if (entry) {
+            void handleUpdateCapsuleGeometry(entry.capsuleId, entry.before)
+          }
+          return
+        }
+      }
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (!activeCapsule) return
@@ -405,19 +543,52 @@ export default function ReviewPage() {
         return
       }
 
-      // Space = 从白针播放/暂停；Shift+Space = 从橙针继续
-      if (e.key === ' ' || e.code === 'Space') {
-        if (!videoPath) return
-        e.preventDefault()
-        const vc = videoControlRef.current
-        if (!vc) return
-        if (isPlaying) {
-          vc.pause()
-        } else if (e.shiftKey) {
-          vc.play(playbackSec)
-        } else {
-          vc.play(anchorSec)
+      // Enter = 保存当前胶囊（通过 AnnotationBar 的 saveRef）
+      if (e.key === 'Enter') {
+        if (mode === 'annotate' && annotationSaveRef.current) {
+          e.preventDefault()
+          void annotationSaveRef.current()
         }
+        return
+      }
+
+      // Alt+Down/Up = 切换 SKU
+      if (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+        if (planItems.length === 0) return
+        e.preventDefault()
+        const currentIdx = planItems.findIndex(item => item.sku_code === currentSkuCode)
+        let nextIdx: number
+        if (e.key === 'ArrowDown') {
+          nextIdx = currentIdx < planItems.length - 1 ? currentIdx + 1 : 0
+        } else {
+          nextIdx = currentIdx > 0 ? currentIdx - 1 : planItems.length - 1
+        }
+        handleSelectSku(planItems[nextIdx].sku_code)
+        return
+      }
+
+      // [ = 设胶囊起点到白针位置；] = 设胶囊终点到白针位置
+      if (e.key === '[' || e.key === ']') {
+        if (!activeCapsule) return
+        e.preventDefault()
+        const patch = e.key === '['
+          ? { start_sec: Math.min(anchorSec, activeCapsule.end_sec - 0.5) }
+          : { end_sec: Math.max(anchorSec, activeCapsule.start_sec + 0.5) }
+        void handleUpdateWithUndo(activeCapsule.id, patch)
+        return
+      }
+
+      // F = 沉浸模式（隐藏 SessionTopBar + 视频管理区）
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault()
+        setImmersive(v => !v)
+        return
+      }
+
+      // M = 切换 Minimap 展开/折叠
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault()
+        setMinimapOpen(v => !v)
         return
       }
 
@@ -433,9 +604,17 @@ export default function ReviewPage() {
     activeCapsule,
     anchorSec,
     createDefaultCapsuleAt,
+    currentSkuCode,
     cycleOverlapAtAnchor,
     handleDeleteActiveCapsule,
+    handleSelectSku,
+    handleUpdateCapsuleGeometry,
+    handleUpdateWithUndo,
+    editStack,
+    viewportStack,
     isPlaying,
+    mode,
+    planItems,
     playbackSec,
     videoPath,
   ])
@@ -460,16 +639,29 @@ export default function ReviewPage() {
       />
 
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        <SessionTopBar
-          currentSession={currentSession}
-          videoInfo={videoInfo}
-          sessions={sessions}
-          mode={mode}
-          onModeChange={setMode}
-          onSelectSession={handleSelectSessionFromTopBar}
-        />
+        {!immersive && (
+          <SessionTopBar
+            currentSession={currentSession}
+            videoInfo={videoInfo}
+            sessions={sessions}
+            mode={mode}
+            onModeChange={setMode}
+            onSelectSession={handleSelectSessionFromTopBar}
+          />
+        )}
+        {immersive && (
+          <div
+            className="h-6 shrink-0 flex items-center px-3 gap-2 border-b border-rv-border bg-rv-panel/60 text-[10px] text-muted-foreground cursor-pointer hover:bg-rv-elevated/30"
+            onClick={() => setImmersive(false)}
+            title="点击退出沉浸模式（或按 F 键）"
+          >
+            <span>沉浸模式</span>
+            {currentSession && <span className="font-mono">{currentSession.date}</span>}
+            <span className="ml-auto">F 退出</span>
+          </div>
+        )}
 
-        {currentSkuCode && (
+        {currentSkuCode && !immersive && (
           <div className="border-b border-rv-border shrink-0">
             <div
               className="px-4 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-rv-elevated/30 transition-colors text-xs"
@@ -536,21 +728,36 @@ export default function ReviewPage() {
           ) : (
             <div className="p-4 space-y-4">
               {videoPath && (
-                <GlobalTimeline
-                  videoPath={videoPath}
-                  videoId={videoId}
-                  videoDuration={videoDuration}
-                  leadTimestamps={leadTimestamps}
-                  currentCenter={anchorSec}
-                  playbackSec={playbackSec}
-                  zoomLevel={'1s'}
-                  coarseRange={coarseRange}
-                  focusRange={focusRange}
-                  onSeek={handleTimelineSeek}
-                  onCoarseRangeChange={handleCoarseRangeChange}
-                  onFocusRangeChange={handleFocusRangeChange}
-                  clipHotspots={clipResults.length > 0 ? clipResults.map(r => r.timestamp) : undefined}
-                />
+                <>
+                  <ProgressBar
+                    videoDuration={videoDuration}
+                    focusRange={focusRange}
+                    playbackSec={playbackSec}
+                    anchorSec={anchorSec}
+                    capsules={capsules}
+                    onClick={() => setMinimapOpen(v => !v)}
+                  />
+                  <MinimapPanel
+                    open={minimapOpen}
+                    onPinnedChange={setMinimapPinned}
+                  >
+                    <GlobalTimeline
+                      videoPath={videoPath}
+                      videoId={videoId}
+                      videoDuration={videoDuration}
+                      leadTimestamps={leadTimestamps}
+                      currentCenter={anchorSec}
+                      playbackSec={playbackSec}
+                      zoomLevel={'1s'}
+                      coarseRange={coarseRange}
+                      focusRange={focusRange}
+                      onSeek={handleTimelineSeek}
+                      onCoarseRangeChange={handleCoarseRangeChange}
+                      onFocusRangeChange={handleFocusRangeChange}
+                      clipHotspots={clipResults.length > 0 ? clipResults.map(r => r.timestamp) : undefined}
+                    />
+                  </MinimapPanel>
+                </>
               )}
 
               {videoPath && skuImages.length > 0 && (
@@ -593,7 +800,7 @@ export default function ReviewPage() {
                 <MultiRowTimeline
                   anchorSec={anchorSec}
                   playbackSec={playbackSec}
-                  displayRange={activeRange}
+                  displayRange={focusRange}
                   coarseRange={coarseRange}
                   focusRange={focusRange}
                   onFocusRangeChange={handleFocusRangeChange}
@@ -605,10 +812,16 @@ export default function ReviewPage() {
                   activeCapsuleId={activeCapsuleId}
                   onFrameSelect={handleFrameSelect}
                   onCreateCapsule={(range) => { void handleCreateCapsule(range) }}
-                  onUpdateCapsule={(capsuleId, patch) => { void handleUpdateCapsuleGeometry(capsuleId, patch) }}
+                  onUpdateCapsule={(capsuleId, patch) => { void handleUpdateWithUndo(capsuleId, patch) }}
                   onActivateCapsule={handleActivateCapsule}
-                  onInteractionStateChange={setCapsuleInteractionState}
+                  onInteractionStateChange={handleInteractionStateChange}
                   onViewportCapacityChange={setTimelineCapacity}
+                  onEdgeHitCheck={autoExpand.checkEdgeHit}
+                  onEdgeDragStop={autoExpand.stopExpand}
+                  edgeGlowSide={autoExpand.glowSide}
+                  edgeHitBoundary={autoExpand.hitBoundary}
+                  edgePreExpand={autoExpand.preExpand}
+                  edgeCurrentStep={autoExpand.currentStep}
                 />
               )}
 
@@ -633,6 +846,7 @@ export default function ReviewPage() {
           <AnnotationBar
             capsule={activeCapsule}
             currentSkuCode={currentSkuCode}
+            saveRef={annotationSaveRef}
             onPatch={handlePatchActiveCapsule}
             onDelete={handleDeleteActiveCapsule}
             onClose={() => setMode('browse')}
@@ -655,7 +869,11 @@ export default function ReviewPage() {
 
       {uiHint && (
         <div
-          className="fixed right-4 z-[120] rounded border border-emerald-400/40 bg-black/80 px-3 py-2 text-xs text-emerald-200 shadow-lg"
+          className={`fixed right-4 z-[120] rounded border bg-black/80 px-3 py-2 text-xs shadow-lg ${
+            uiHint.variant === 'warning'
+              ? 'border-red-400/40 text-red-200'
+              : 'border-emerald-400/40 text-emerald-200'
+          }`}
           style={{ bottom: undoDelete ? 86 : 16 }}
         >
           {uiHint.text}

@@ -1,6 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
 import { batchFrames } from '@/api/client'
-import { runWithLimit } from '@/lib/async-utils'
 
 export interface FrameData {
   timestamp: number
@@ -31,6 +30,13 @@ const LAYER_CONFIG: Record<ResLayer, LayerConfig> = {
 export { LAYER_CONFIG }
 
 const MAX_BATCH_CONCURRENCY = 2
+
+/**
+ * 同向合并窗口（ms）。
+ * 在此时间窗内连续的同层同向 extendRange 调用会被合并为一次请求。
+ * 对应文档第 5 节: "同向窗口合并"
+ */
+const MERGE_WINDOW_MS = 150
 
 type LoadingState = Record<ResLayer, boolean>
 type ProgressState = Record<ResLayer, [number, number]>
@@ -65,6 +71,43 @@ const EMPTY_LOADING: LoadingState = { L1: false, L2: false, L3: false }
 const EMPTY_PROGRESS: ProgressState = { L1: [0, 0], L2: [0, 0], L3: [0, 0] }
 
 /**
+ * 全局信号量 — 限制所有 batchFrames 请求的总并发数。
+ * 无论请求来自 startPreload、loadL3 还是 extendRange，
+ * 同时在途的 batchFrames 请求数不超过 MAX_BATCH_CONCURRENCY（验收 #10）。
+ */
+interface AsyncSemaphore {
+  count: number
+  waiters: (() => void)[]
+}
+
+async function acquireSlot(sem: AsyncSemaphore) {
+  if (sem.count < MAX_BATCH_CONCURRENCY) {
+    sem.count++
+    return
+  }
+  await new Promise<void>(resolve => sem.waiters.push(resolve))
+  sem.count++
+}
+
+function releaseSlot(sem: AsyncSemaphore) {
+  sem.count--
+  if (sem.waiters.length > 0) {
+    sem.waiters.shift()!()
+  }
+}
+
+/** 待合并请求 */
+interface PendingExpand {
+  timer: ReturnType<typeof setTimeout>
+  layer: ResLayer
+  start: number
+  end: number
+  interval?: number
+  videoPath: string
+  videoId: number | undefined
+}
+
+/**
  * 多分辨率帧缓存 hook
  *
  * L1: 30s — 全局 filmstrip，覆盖整个视频
@@ -72,6 +115,11 @@ const EMPTY_PROGRESS: ProgressState = { L1: [0, 0], L2: [0, 0], L3: [0, 0] }
  * L3: 1s — 局部 filmstrip 放大层（±2min，按需加载）
  *
  * ref 存缓存避免闭包过期，state 存进度触发渲染
+ *
+ * 请求管理（文档第 5 节 / 验收 #10）:
+ * - AbortController: 新请求到来时 abort 同层旧请求
+ * - 同向合并: 150ms 窗口内连续 extendRange 合并为单次
+ * - 并发 ≤ 2: 全局信号量 semRef 限制所有 batchFrames 总并发
  */
 export function useMultiResFrames(videoDuration: number) {
   const cacheRef = useRef<Record<ResLayer, Map<number, string>>>({
@@ -84,6 +132,21 @@ export function useMultiResFrames(videoDuration: number) {
     L1: 0, L2: 0, L3: 0,
   })
   const sessionRef = useRef(0)
+
+  // --- 全局信号量 ---
+  const semRef = useRef<AsyncSemaphore>({ count: 0, waiters: [] })
+
+  // --- 请求取消 ---
+  const abortControllersRef = useRef<Record<ResLayer, AbortController | null>>({
+    L1: null, L2: null, L3: null,
+  })
+  const preloadAcRef = useRef<AbortController | null>(null)
+  const l3AcRef = useRef<AbortController | null>(null)
+
+  // --- 同向合并 ---
+  const pendingExpandRef = useRef<Record<ResLayer, PendingExpand | null>>({
+    L1: null, L2: null, L3: null,
+  })
 
   const [progress, setProgress] = useState<MultiResProgress>({
     loading: { ...EMPTY_LOADING },
@@ -102,6 +165,7 @@ export function useMultiResFrames(videoDuration: number) {
     end: number,
     sid: number,
     intervalOverride?: number,
+    signal?: AbortSignal,
   ) => {
     const config = LAYER_CONFIG[layer]
     const interval = intervalOverride ?? config.interval
@@ -126,19 +190,23 @@ export function useMultiResFrames(videoDuration: number) {
       batches.push(uncached.slice(i, i + config.batchSize))
     }
 
-    // 限制并发为 MAX_BATCH_CONCURRENCY，每批完成后增量更新进度
+    // 通过全局信号量限制总并发 ≤ MAX_BATCH_CONCURRENCY（验收 #10）
+    // 所有 loadRange 调用（startPreload / loadL3 / extendRange）共享同一信号量
     let done = 0
+    const sem = semRef.current
     try {
-      await runWithLimit(batches, MAX_BATCH_CONCURRENCY, async (batch) => {
-        if (sessionRef.current !== sid) return
+      await Promise.all(batches.map(async (batch) => {
+        if (sessionRef.current !== sid || signal?.aborted) return
+        await acquireSlot(sem)
         try {
+          if (sessionRef.current !== sid || signal?.aborted) return
           const result = await batchFrames({
             path: videoPath,
             video_id: videoId,
             timestamps: batch,
             w: config.frameW, h: config.frameH,
-          })
-          if (sessionRef.current !== sid) return
+          }, signal)
+          if (sessionRef.current !== sid || signal?.aborted) return
 
           const map = cacheRef.current[layer]
           for (const f of result.frames) {
@@ -151,9 +219,12 @@ export function useMultiResFrames(videoDuration: number) {
           }))
           bump()
         } catch (err) {
+          if (signal?.aborted) return
           console.error(`[${layer}] 批量抽帧失败:`, err)
+        } finally {
+          releaseSlot(sem)
         }
-      })
+      }))
     } finally {
       if (inFlightRef.current[layer] > 0) inFlightRef.current[layer] -= 1
       if (sessionRef.current === sid) {
@@ -180,22 +251,27 @@ export function useMultiResFrames(videoDuration: number) {
   const startPreload = useCallback((videoPath: string, anchorSec: number, videoId?: number) => {
     const sid = ++sessionRef.current
 
+    // 中止旧的预加载，纳入全局并发控制
+    preloadAcRef.current?.abort()
+    const ac = new AbortController()
+    preloadAcRef.current = ac
+
     ;(async () => {
       // 渐进式预加载，所有间隔都是 10 的倍数，保证嵌套对齐
       // 1. 全视频 120s — 最快出图（~125帧 for 250min video）
-      await loadRange(videoPath, videoId, 'L2', 0, videoDuration, sid, 120)
-      if (sessionRef.current !== sid) return
+      await loadRange(videoPath, videoId, 'L2', 0, videoDuration, sid, 120, ac.signal)
+      if (sessionRef.current !== sid || ac.signal.aborted) return
 
       // 2. 全视频 60s — 补中间帧（~125帧增量）
-      await loadRange(videoPath, videoId, 'L2', 0, videoDuration, sid, 60)
-      if (sessionRef.current !== sid) return
+      await loadRange(videoPath, videoId, 'L2', 0, videoDuration, sid, 60, ac.signal)
+      if (sessionRef.current !== sid || ac.signal.aborted) return
 
       // 3. 锚点附近 ±10min 10s — 用户最可能浏览的区域
-      await loadRange(videoPath, videoId, 'L2', anchorSec - 10 * 60, anchorSec + 10 * 60, sid, 10)
-      if (sessionRef.current !== sid) return
+      await loadRange(videoPath, videoId, 'L2', anchorSec - 10 * 60, anchorSec + 10 * 60, sid, 10, ac.signal)
+      if (sessionRef.current !== sid || ac.signal.aborted) return
 
       // 4. 锚点附近 ±2min 1s — 精细层
-      await loadRange(videoPath, videoId, 'L3', anchorSec - 2 * 60, anchorSec + 2 * 60, sid)
+      await loadRange(videoPath, videoId, 'L3', anchorSec - 2 * 60, anchorSec + 2 * 60, sid, undefined, ac.signal)
     })()
   }, [loadRange, videoDuration])
 
@@ -204,16 +280,22 @@ export function useMultiResFrames(videoDuration: number) {
     const sid = sessionRef.current
     const steps = [2, 4, 6, 8] // 每步的半径（分钟）
 
+    // 中止旧的 L3 加载，纳入全局并发控制
+    l3AcRef.current?.abort()
+    const ac = new AbortController()
+    l3AcRef.current = ac
+
     ;(async () => {
       for (const mins of steps) {
-        if (sessionRef.current !== sid) return
+        if (sessionRef.current !== sid || ac.signal.aborted) return
         const half = mins * 60
-        await loadRange(videoPath, videoId, 'L3', centerSec - half, centerSec + half, sid)
+        await loadRange(videoPath, videoId, 'L3', centerSec - half, centerSec + half, sid, undefined, ac.signal)
       }
     })()
   }, [loadRange])
 
-  /** 获取指定层级指定范围内的帧，intervalOverride 可覆盖默认步进 */
+  /** 获取指定层级指定范围内的帧，intervalOverride 可覆盖默认步进。
+   *  所有时间槽位都返回 FrameData，未加载的帧 url 为空串（UI 显示 skeleton）。 */
   const getFrames = useCallback((
     layer: ResLayer, startSec: number, endSec: number, intervalOverride?: number,
   ): FrameData[] => {
@@ -226,13 +308,19 @@ export function useMultiResFrames(videoDuration: number) {
     const e = Math.min(videoDuration, endSec)
     for (let t = s; t <= e; t += interval) {
       const ts = Math.round(t * 10) / 10
-      const url = cache.get(ts)
-      if (url) frames.push({ timestamp: ts, url })
+      const url = cache.get(ts) ?? ''
+      frames.push({ timestamp: ts, url })
     }
     return frames
   }, [videoDuration])
 
-  /** 平移时增量加载，intervalOverride 可覆盖默认间隔 */
+  /**
+   * 平移/扩窗时增量加载。
+   *
+   * 增强（文档第 5 节 / 验收 #10）:
+   * - 取消过期请求: 同层新请求到来时 abort 旧的
+   * - 同向合并: MERGE_WINDOW_MS 内多次调用合并为一次
+   */
   const extendRange = useCallback((
     videoPath: string,
     videoId: number | undefined,
@@ -244,21 +332,66 @@ export function useMultiResFrames(videoDuration: number) {
     const sid = sessionRef.current
     const existing = rangeRef.current[layer]
 
+    // 计算实际需要加载的范围
+    let loadLeft: [number, number] | null = null
+    let loadRight: [number, number] | null = null
+
     if (!existing) {
-      loadRange(videoPath, videoId, layer, newStart, newEnd, sid, intervalOverride)
-      return
+      loadLeft = [newStart, newEnd]
+    } else {
+      const [es, ee] = existing
+      // 完全不相交 → 重置
+      if (newEnd < es || newStart > ee) {
+        rangeRef.current[layer] = null
+        loadLeft = [newStart, newEnd]
+      } else {
+        if (newStart < es) loadLeft = [newStart, es]
+        if (newEnd > ee) loadRight = [ee, newEnd]
+      }
     }
 
-    const [es, ee] = existing
-    // 新窗口与已加载窗口完全不相交时，只补当前窗口，避免跨小时”补桥”导致长时间空白
-    if (newEnd < es || newStart > ee) {
-      rangeRef.current[layer] = null
-      loadRange(videoPath, videoId, layer, newStart, newEnd, sid, intervalOverride)
-      return
+    if (!loadLeft && !loadRight) return
+
+    // 取消同层旧的在途请求
+    const oldAc = abortControllersRef.current[layer]
+    if (oldAc) oldAc.abort()
+    const ac = new AbortController()
+    abortControllersRef.current[layer] = ac
+
+    // 同向合并: 如果有 pending 则合并范围
+    const pending = pendingExpandRef.current[layer]
+    if (pending) {
+      clearTimeout(pending.timer)
+      // 合并范围
+      if (loadLeft) {
+        loadLeft = [Math.min(loadLeft[0], pending.start), Math.max(loadLeft[1], pending.end)]
+      } else if (loadRight) {
+        loadRight = [Math.min(loadRight[0], pending.start), Math.max(loadRight[1], pending.end)]
+      }
+      pendingExpandRef.current[layer] = null
     }
 
-    if (newStart < es) loadRange(videoPath, videoId, layer, newStart, es, sid, intervalOverride)
-    if (newEnd > ee) loadRange(videoPath, videoId, layer, ee, newEnd, sid, intervalOverride)
+    // 合并后的总范围
+    const mergedStart = loadLeft ? loadLeft[0] : loadRight![0]
+    const mergedEnd = loadRight ? loadRight[1] : loadLeft![1]
+
+    // 延迟发出（MERGE_WINDOW_MS 内可继续合并）
+    // 合并 left/right 为单次 loadRange — 保证任意时刻在途请求 ≤ 2（验收 #10）
+    // loadRange 内部通过全局信号量控制并发，已缓存的帧会被 filter 跳过
+    const timer = setTimeout(() => {
+      pendingExpandRef.current[layer] = null
+      loadRange(videoPath, videoId, layer, mergedStart, mergedEnd, sid, intervalOverride, ac.signal)
+    }, MERGE_WINDOW_MS)
+
+    pendingExpandRef.current[layer] = {
+      timer,
+      layer,
+      start: mergedStart,
+      end: mergedEnd,
+      interval: intervalOverride,
+      videoPath,
+      videoId,
+    }
   }, [loadRange])
 
   /** 重置缓存（切换 lead / 切换场次） */
@@ -267,6 +400,20 @@ export function useMultiResFrames(videoDuration: number) {
     cacheRef.current = { L1: new Map(), L2: new Map(), L3: new Map() }
     rangeRef.current = { L1: null, L2: null, L3: null }
     inFlightRef.current = { L1: 0, L2: 0, L3: 0 }
+    // 取消所有在途请求（extendRange + startPreload + loadL3）
+    for (const layer of ['L1', 'L2', 'L3'] as ResLayer[]) {
+      abortControllersRef.current[layer]?.abort()
+      abortControllersRef.current[layer] = null
+      const p = pendingExpandRef.current[layer]
+      if (p) { clearTimeout(p.timer); pendingExpandRef.current[layer] = null }
+    }
+    preloadAcRef.current?.abort()
+    preloadAcRef.current = null
+    l3AcRef.current?.abort()
+    l3AcRef.current = null
+    // 释放信号量等待队列（配合 sid 检查自动清退）
+    const sem = semRef.current
+    while (sem.waiters.length > 0) sem.waiters.shift()!()
     setProgress({
       loading: { ...EMPTY_LOADING },
       progress: { ...EMPTY_PROGRESS },

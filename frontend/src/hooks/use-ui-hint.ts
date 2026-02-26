@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+export type UiHintVariant = 'info' | 'warning'
+
 export interface UiHint {
   id: number
   text: string
+  variant: UiHintVariant
 }
 
 export function useUiHint(defaultDurationMs = 1400) {
@@ -18,9 +21,9 @@ export function useUiHint(defaultDurationMs = 1400) {
     }
   }, [])
 
-  const show = useCallback((text: string, durationMs = defaultDurationMs) => {
+  const show = useCallback((text: string, durationMs = defaultDurationMs, variant: UiHintVariant = 'info') => {
     const id = ++seqRef.current
-    setHint({ id, text })
+    setHint({ id, text, variant })
 
     if (timerRef.current != null) {
       window.clearTimeout(timerRef.current)

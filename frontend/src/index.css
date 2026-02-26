@@ -141,3 +141,32 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* 激活胶囊呼吸效边框 — 2s 周期柔和脉冲 */
+@keyframes capsule-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.6), 0 0 6px rgba(16, 185, 129, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.95), 0 0 14px rgba(16, 185, 129, 0.45);
+  }
+}
+
+/* 自动扩窗步长 badge 弹出动画 */
+@keyframes step-pop {
+  0% { transform: scale(0.5); opacity: 0; }
+  50% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 0.8; }
+}
+.animate-step-pop {
+  animation: step-pop 0.25s ease-out both;
+}
+
+/* 新帧渐显 — URL 加载完成后从暗到亮 */
+@keyframes frame-appear {
+  from { opacity: 0.3; }
+  to { opacity: 1; }
+}
+.animate-frame-appear {
+  animation: frame-appear 0.3s ease-out both;
+}
