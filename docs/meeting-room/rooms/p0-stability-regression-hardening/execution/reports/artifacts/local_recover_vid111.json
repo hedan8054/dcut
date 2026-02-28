@@ -1,0 +1,18 @@
+{
+  "video_id": 111,
+  "ok": true,
+  "proxy_path": "/Volumes/切片/proxy/2025-03-27_小号.mp4",
+  "proxy_name": "2025-03-27_小号.mp4",
+  "check": {
+    "ok": true,
+    "reasons": [],
+    "video_duration": 11273.533333,
+    "audio_duration": 11273.322667,
+    "expected_duration": 11273.633333,
+    "av_gap": 0.211
+  },
+  "elapsed_sec": 1527.8,
+  "seg_count": 1,
+  "mixed_formats": false,
+  "host": "ABCs-MacBook-Pro.local"
+}

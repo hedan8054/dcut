@@ -1,0 +1,18 @@
+{
+  "video_id": 115,
+  "ok": true,
+  "proxy_path": "Z:\\proxy\\2025-03-20_小号.mp4",
+  "proxy_name": "2025-03-20_小号.mp4",
+  "check": {
+    "ok": true,
+    "reasons": [],
+    "video_duration": 8184.733333,
+    "audio_duration": 8184.533333,
+    "expected_duration": 8184.83,
+    "av_gap": 0.2
+  },
+  "elapsed_sec": 654.9,
+  "seg_count": 1,
+  "mixed_formats": false,
+  "host": "DESKTOP-OC5J2S6"
+}

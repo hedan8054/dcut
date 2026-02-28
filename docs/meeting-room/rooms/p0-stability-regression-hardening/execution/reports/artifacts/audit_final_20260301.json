@@ -1,0 +1,14 @@
+{
+  "scanned": 158,
+  "bad_count": 0,
+  "ok_count": 158,
+  "bad_video_ids": [],
+  "bad": [],
+  "by_status": {
+    "done_bad": 0,
+    "generating_stale": 0,
+    "generating_orphan": 0,
+    "failed": 0
+  },
+  "timestamp": "2026-03-01T01:05:00+0800"
+}

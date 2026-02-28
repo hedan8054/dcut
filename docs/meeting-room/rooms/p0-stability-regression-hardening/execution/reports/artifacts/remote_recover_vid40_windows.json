@@ -1,0 +1,18 @@
+{
+  "video_id": 40,
+  "ok": true,
+  "proxy_path": "Z:\\proxy\\2025-09-10_小号.mp4",
+  "proxy_name": "2025-09-10_小号.mp4",
+  "check": {
+    "ok": true,
+    "reasons": [],
+    "video_duration": 9035.545455,
+    "audio_duration": 9035.382993,
+    "expected_duration": 9035.504278,
+    "av_gap": 0.162
+  },
+  "elapsed_sec": 498.2,
+  "seg_count": 1,
+  "mixed_formats": false,
+  "host": "DESKTOP-OC5J2S6"
+}

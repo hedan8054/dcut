@@ -1,0 +1,37 @@
+{
+  "video_id": 68,
+  "expected_duration": 12395.065666,
+  "seg_count": 2,
+  "strategy_safe": {
+    "ok": true,
+    "elapsed_sec": 577.6,
+    "probe": {
+      "video_duration": 12394.966667,
+      "audio_duration": 12394.728667,
+      "has_audio": true
+    },
+    "file_size": 418743480,
+    "av_gap": 0.238,
+    "dur_ratio": 1.0
+  },
+  "strategy_fast": {
+    "ok": true,
+    "elapsed_sec": 579.5,
+    "probe": {
+      "video_duration": 12395.066667,
+      "audio_duration": 6610.546021,
+      "has_audio": true
+    },
+    "file_size": 416684333,
+    "av_gap": 5784.521,
+    "dur_ratio": 1.0
+  },
+  "conclusion": {
+    "safe_ok": true,
+    "fast_ok": true,
+    "winner": "safe",
+    "safe_speed_sec": 577.6,
+    "fast_speed_sec": 579.5,
+    "speed_ratio": 1.0
+  }
+}

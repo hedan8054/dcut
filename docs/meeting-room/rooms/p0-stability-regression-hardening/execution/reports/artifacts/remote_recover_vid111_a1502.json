@@ -1,0 +1,18 @@
+{
+  "video_id": 111,
+  "ok": false,
+  "error": "self_check failed: ['video_missing', 'audio_missing']",
+  "check": {
+    "ok": false,
+    "reasons": [
+      "video_missing",
+      "audio_missing"
+    ],
+    "video_duration": 0.0,
+    "audio_duration": 0.0,
+    "expected_duration": 11273.633333,
+    "av_gap": 0.0
+  },
+  "proxy_name": "2025-03-27_小号.mp4",
+  "elapsed_sec": 3113.9
+}
