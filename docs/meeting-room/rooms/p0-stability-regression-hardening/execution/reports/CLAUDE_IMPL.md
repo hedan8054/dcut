@@ -577,3 +577,75 @@ vid=68 是唯一的 ts+mp4 混合格式视频。主线代码对混合格式走 `
 - 无阻塞项，可进入下一阶段
 
 收口证据：`artifacts/final_closeout_20260228T193405Z.json`
+
+---
+
+## 19. U1~U5 体感修复（NEXT_ACTIONS §0）
+
+> 更新时间：2026-03-01
+> 状态：已完成 + 3 风险修正
+
+### 19.1 改动清单
+
+| Issue | 文件 | 改动 | 风险 |
+|-------|------|------|------|
+| U1 | `SkuPanelItem.tsx:206` | timeout guard 加 `if (hasFrame) return` | 低 |
+| U2 | `ReviewPage.tsx:242` | useEffect 监听 playbackSec，贴边 30s 时 autoExpand，5s 节流 | 低 |
+| U3 | `MultiRowTimeline.tsx:1266`, `types/index.ts:93`, `SkuPanelItem.tsx:133` | VideoControl.seek() 只改 currentTime；橙针 pointerDown 拖拽 | 低 |
+| U4 | `FocusRangeSlider.tsx:73,82,87,92`, `MultiRowTimeline.tsx:1148` | onEdgeHit → autoExpand.checkEdgeHit(0, dir)；dragEnd → stopExpand | 低 |
+| U5 | `tile_extractor.py:199-217,251-256` | relay_q 中继启用 _monitor_frames 流式推帧；去除完成后二次全量推 | 低 |
+
+### 19.2 风险修正（R1-3）
+
+1. **R1: U4 扩窗节流** — 原实现 slider 每次 mousemove 直接 `handleAutoExpand(dir, 30)`，会疯狂扩窗。改为复用 `useAutoExpand` 的 300ms 起步 + 150ms 节流 + 递进步长状态机。dragEnd 时调 `stopExpand` 清理定时器。
+2. **R2: U3 seek 语义** — 原实现 `play(sec)` 强制播放。新增 `VideoControl.seek(sec)` 只改 `currentTime` 不改播放/暂停状态。橙针拖拽调 seek 而非 play。
+3. **R3: U5 二次喷发** — `_do_extract` 内部 `_monitor_frames` + 补漏 已经完整推送所有帧到 relay_q。`extract_tile` 完成后不再二次全量推 `final_frames`，只推 `None` 完成信号。
+
+### 19.3 帧推送时序（U5 证据）
+
+```
+t=0ms    scout 先行帧推送 (不走信号量)
+t=50ms   _TILE_SEMAPHORE 获取，ffmpeg 启动
+t=70ms   _monitor_frames 开始 20ms 轮询
+t=90ms   frame_000001.jpg → relay_q → on_frame_ready  ← 增量
+t=110ms  frame_000002.jpg → relay_q → on_frame_ready  ← 增量
+...      持续 20ms 间隔推帧
+t=800ms  ffmpeg 完成, _monitor_frames cancel
+t=810ms  _collect_frames 对比 already_pushed, 补推遗漏帧 → relay_q
+t=820ms  _do_extract push None → relay_task 退出
+t=830ms  extract_tile rename tmp→final
+t=840ms  extract_tile push None → SSE 结束
+         ↑ 不再二次推 final_frames
+```
+
+### 19.4 编译验证
+
+```
+python3 -m py_compile backend/services/tile_extractor.py backend/routers/video_tiles.py → OK
+cd frontend && npx tsc -b → 0 errors
+```
+
+### 19.5 U5 修复后复测（No-Go 清零）
+
+**问题**：首轮实现中 `_relay_frames` 只做 `scout_sent` 去重，未对 `_monitor_frames` + `_do_extract` 补漏的两轮帧做全局 ts 去重。实测 FRAME_EVENTS=119, UNIQ_TS=60, dup_ts=59。
+
+**根因**：`_do_extract` 内部两个推帧源（`_monitor_frames` 实时推 + ffmpeg 完成后 `_collect_frames` 补漏推）都写入同一个 `relay_q`。`_relay_frames` 只跳过 `scout_sent`，不跳过 monitor 已推过的 ts。
+
+**修复**：在 `_relay_frames` 中新增 `relay_sent: set[float]`，对所有经 relay_q 转发的帧做 timestamp 级去重。
+
+**实测结果**：
+| 测试 | 帧数 | frame_events | unique_ts | dup_ts | 耗时 |
+|------|------|-------------|-----------|--------|------|
+| 10帧 (2075~2085) | 10 | 10 | 10 | **0** | 976ms |
+| 60帧 (2075~2135) | 60 | 60 | 60 | **0** | 1173ms |
+
+硬约束满足：同一 `/tiles/stream` 请求内，每个 timestamp 最多推 1 次。
+
+### 19.6 证据
+
+- `execution/reports/artifacts/u1u5_impl_evidence_20260301.json` — 初版全量证据
+- `execution/reports/artifacts/u5_stream_dedup_fix_20260301T2330.json` — U5 去重修复实测
+
+### 19.7 Codex 终审结论（U5）
+
+- 2026-03-01 Codex 终审：**U5 Go**（10帧/60帧两轮实测 `dup_ts=0`，满足 `NEXT_ACTIONS.md §0.5` 第3条“回填过程可见持续进展、不再出现一次性喷发”）。
