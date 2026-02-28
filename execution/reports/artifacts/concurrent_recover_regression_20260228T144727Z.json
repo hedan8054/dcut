@@ -1,0 +1,2029 @@
+{
+  "test_time": "20260228T144727Z",
+  "test_ids": [
+    23,
+    31,
+    40
+  ],
+  "meta": {
+    "git_commit_sha": "2f86c1d",
+    "git_dirty": true,
+    "git_dirty_files": 42,
+    "python_version": "3.14.3",
+    "python_impl": "CPython",
+    "backend_pid": 95101,
+    "backend_health": {
+      "status_code": 200,
+      "body": {
+        "status": "ok",
+        "version": "1.2"
+      }
+    },
+    "script_path": "/Users/ddmbp/dcut/v1.2/execution/reports/artifacts/concurrent_recover_test.py",
+    "script_sha256": "56e73f9315b1ee300c9b7911dbcb184bd57d08437e06e9cf6391519dec2f8cfa"
+  },
+  "phase1": {
+    "steps": [
+      {
+        "step": "p1_0_baseline",
+        "status_code": 200,
+        "body": {
+          "total": 158,
+          "none": 0,
+          "queued": 0,
+          "generating": 0,
+          "done": 147,
+          "failed": 11
+        },
+        "url": "http://localhost:8421/api/video/proxy/status",
+        "latency_ms": 7
+      },
+      {
+        "step": "p1_1_concurrent_batch",
+        "elapsed_ms": 5,
+        "batch_A": {
+          "tag": "batch_A",
+          "status_code": 200,
+          "body": {
+            "queued": 3,
+            "video_ids": [
+              23,
+              31,
+              40
+            ]
+          },
+          "url": "http://localhost:8421/api/video/proxy/batch",
+          "latency_ms": 5
+        },
+        "batch_B": {
+          "tag": "batch_B",
+          "status_code": 200,
+          "body": {
+            "queued": 0,
+            "video_ids": []
+          },
+          "url": "http://localhost:8421/api/video/proxy/batch",
+          "latency_ms": 3
+        }
+      },
+      {
+        "step": "p1_2_status",
+        "status_code": 200,
+        "body": {
+          "total": 158,
+          "none": 0,
+          "queued": 2,
+          "generating": 1,
+          "done": 147,
+          "failed": 8
+        },
+        "url": "http://localhost:8421/api/video/proxy/status",
+        "latency_ms": 26
+      }
+    ]
+  },
+  "phase2": {
+    "steps": [
+      {
+        "step": "p2_0_wait_generating",
+        "generating_vid": 23,
+        "waited_sec": 0.0
+      },
+      {
+        "step": "p2_1_pre_attack",
+        "per_id": {
+          "23": {
+            "status_code": 200,
+            "body": {
+              "phase": "generating",
+              "percent": 0,
+              "message": "转码中 0%",
+              "updated_at": 1772290048.024401
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/23",
+            "latency_ms": 3
+          },
+          "31": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/31",
+            "latency_ms": 9
+          },
+          "40": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/40",
+            "latency_ms": 7
+          }
+        }
+      },
+      {
+        "step": "p2_1_pre_status",
+        "status_code": 200,
+        "body": {
+          "total": 158,
+          "none": 0,
+          "queued": 2,
+          "generating": 1,
+          "done": 147,
+          "failed": 8
+        },
+        "url": "http://localhost:8421/api/video/proxy/status",
+        "latency_ms": 6
+      },
+      {
+        "step": "p2_2_attack",
+        "elapsed_ms": 4,
+        "generating_vid": 23,
+        "attack_batch": {
+          "tag": "attack_batch",
+          "status_code": 200,
+          "body": {
+            "queued": 0,
+            "video_ids": []
+          },
+          "url": "http://localhost:8421/api/video/proxy/batch",
+          "latency_ms": 4
+        },
+        "attack_single": {
+          "tag": "attack_single_23",
+          "status_code": 409,
+          "body": {
+            "detail": "代理任务已在执行，请稍候"
+          },
+          "url": "http://localhost:8421/api/video/registry/23/proxy",
+          "latency_ms": 3
+        }
+      },
+      {
+        "step": "p2_3_post_status",
+        "status_code": 200,
+        "body": {
+          "total": 158,
+          "none": 0,
+          "queued": 2,
+          "generating": 1,
+          "done": 147,
+          "failed": 8
+        },
+        "url": "http://localhost:8421/api/video/proxy/status",
+        "latency_ms": 3
+      },
+      {
+        "step": "p2_3_post_progress",
+        "per_id": {
+          "23": {
+            "status_code": 200,
+            "body": {
+              "phase": "generating",
+              "percent": 0,
+              "message": "转码中 0%",
+              "updated_at": 1772290048.024401
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/23",
+            "latency_ms": 4
+          },
+          "31": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/31",
+            "latency_ms": 2
+          },
+          "40": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/40",
+            "latency_ms": 3
+          }
+        }
+      },
+      {
+        "step": "p2_4_polling",
+        "polls": [
+          {
+            "poll": 0,
+            "status": {
+              "status_code": 200,
+              "body": {
+                "total": 158,
+                "none": 0,
+                "queued": 2,
+                "generating": 1,
+                "done": 147,
+                "failed": 8
+              },
+              "url": "http://localhost:8421/api/video/proxy/status",
+              "latency_ms": 8
+            },
+            "per_id": {
+              "23": {
+                "status_code": 200,
+                "body": {
+                  "phase": "generating",
+                  "percent": 0,
+                  "message": "转码中 0%",
+                  "updated_at": 1772290048.024401
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/23",
+                "latency_ms": 3
+              },
+              "31": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/31",
+                "latency_ms": 4
+              },
+              "40": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/40",
+                "latency_ms": 4
+              }
+            }
+          },
+          {
+            "poll": 1,
+            "status": {
+              "status_code": 200,
+              "body": {
+                "total": 158,
+                "none": 0,
+                "queued": 2,
+                "generating": 1,
+                "done": 147,
+                "failed": 8
+              },
+              "url": "http://localhost:8421/api/video/proxy/status",
+              "latency_ms": 5
+            },
+            "per_id": {
+              "23": {
+                "status_code": 200,
+                "body": {
+                  "phase": "generating",
+                  "percent": 0,
+                  "message": "转码中 0%",
+                  "updated_at": 1772290048.024401
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/23",
+                "latency_ms": 2
+              },
+              "31": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/31",
+                "latency_ms": 2
+              },
+              "40": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/40",
+                "latency_ms": 4
+              }
+            }
+          },
+          {
+            "poll": 2,
+            "status": {
+              "status_code": 200,
+              "body": {
+                "total": 158,
+                "none": 0,
+                "queued": 2,
+                "generating": 1,
+                "done": 147,
+                "failed": 8
+              },
+              "url": "http://localhost:8421/api/video/proxy/status",
+              "latency_ms": 3
+            },
+            "per_id": {
+              "23": {
+                "status_code": 200,
+                "body": {
+                  "phase": "generating",
+                  "percent": 0,
+                  "message": "转码中 0%",
+                  "updated_at": 1772290048.024401
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/23",
+                "latency_ms": 5
+              },
+              "31": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/31",
+                "latency_ms": 1
+              },
+              "40": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/40",
+                "latency_ms": 2
+              }
+            }
+          },
+          {
+            "poll": 3,
+            "status": {
+              "status_code": 200,
+              "body": {
+                "total": 158,
+                "none": 0,
+                "queued": 2,
+                "generating": 1,
+                "done": 147,
+                "failed": 8
+              },
+              "url": "http://localhost:8421/api/video/proxy/status",
+              "latency_ms": 5
+            },
+            "per_id": {
+              "23": {
+                "status_code": 200,
+                "body": {
+                  "phase": "generating",
+                  "percent": 0,
+                  "message": "转码中 0%",
+                  "updated_at": 1772290048.024401
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/23",
+                "latency_ms": 2
+              },
+              "31": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/31",
+                "latency_ms": 3
+              },
+              "40": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/40",
+                "latency_ms": 4
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "phase3": {
+    "steps": [
+      {
+        "step": "p3_0_pre_state",
+        "per_id": {
+          "23": {
+            "status_code": 200,
+            "body": {
+              "phase": "generating",
+              "percent": 0,
+              "message": "转码中 0%",
+              "updated_at": 1772290048.024401
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/23",
+            "latency_ms": 3
+          },
+          "31": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/31",
+            "latency_ms": 5
+          },
+          "40": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/40",
+            "latency_ms": 7
+          }
+        }
+      },
+      {
+        "step": "p3_1_post_state",
+        "per_id": {
+          "23": {
+            "status_code": 200,
+            "body": {
+              "phase": "generating",
+              "percent": 0,
+              "message": "转码中 0%",
+              "updated_at": 1772290048.024401
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/23",
+            "latency_ms": 4
+          },
+          "31": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/31",
+            "latency_ms": 8
+          },
+          "40": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/40",
+            "latency_ms": 4
+          }
+        }
+      },
+      {
+        "step": "p3_1_post_status",
+        "status_code": 200,
+        "body": {
+          "total": 158,
+          "none": 0,
+          "queued": 2,
+          "generating": 1,
+          "done": 147,
+          "failed": 8
+        },
+        "url": "http://localhost:8421/api/video/proxy/status",
+        "latency_ms": 5
+      }
+    ],
+    "rounds": [
+      {
+        "round": 0,
+        "elapsed_ms": 9,
+        "results": [
+          {
+            "tag": "hunt_r0_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 6
+          },
+          {
+            "tag": "hunt_r0_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 6
+          },
+          {
+            "tag": "hunt_r0_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 9
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 1,
+        "elapsed_ms": 5,
+        "results": [
+          {
+            "tag": "hunt_r1_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          },
+          {
+            "tag": "hunt_r1_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 4
+          },
+          {
+            "tag": "hunt_r1_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 2,
+        "elapsed_ms": 5,
+        "results": [
+          {
+            "tag": "hunt_r2_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          },
+          {
+            "tag": "hunt_r2_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          },
+          {
+            "tag": "hunt_r2_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 3,
+        "elapsed_ms": 7,
+        "results": [
+          {
+            "tag": "hunt_r3_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 6
+          },
+          {
+            "tag": "hunt_r3_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 7
+          },
+          {
+            "tag": "hunt_r3_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 6
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 4,
+        "elapsed_ms": 5,
+        "results": [
+          {
+            "tag": "hunt_r4_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          },
+          {
+            "tag": "hunt_r4_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 4
+          },
+          {
+            "tag": "hunt_r4_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 4
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 5,
+        "elapsed_ms": 5,
+        "results": [
+          {
+            "tag": "hunt_r5_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 4
+          },
+          {
+            "tag": "hunt_r5_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 4
+          },
+          {
+            "tag": "hunt_r5_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 4
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 6,
+        "elapsed_ms": 6,
+        "results": [
+          {
+            "tag": "hunt_r6_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          },
+          {
+            "tag": "hunt_r6_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          },
+          {
+            "tag": "hunt_r6_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 7,
+        "elapsed_ms": 5,
+        "results": [
+          {
+            "tag": "hunt_r7_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          },
+          {
+            "tag": "hunt_r7_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          },
+          {
+            "tag": "hunt_r7_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 5
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 8,
+        "elapsed_ms": 7,
+        "results": [
+          {
+            "tag": "hunt_r8_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 3
+          },
+          {
+            "tag": "hunt_r8_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 7
+          },
+          {
+            "tag": "hunt_r8_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 7
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 9,
+        "elapsed_ms": 9,
+        "results": [
+          {
+            "tag": "hunt_r9_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 9
+          },
+          {
+            "tag": "hunt_r9_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 8
+          },
+          {
+            "tag": "hunt_r9_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 9
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 10,
+        "elapsed_ms": 8,
+        "results": [
+          {
+            "tag": "hunt_r10_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 8
+          },
+          {
+            "tag": "hunt_r10_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 8
+          },
+          {
+            "tag": "hunt_r10_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 8
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 11,
+        "elapsed_ms": 9,
+        "results": [
+          {
+            "tag": "hunt_r11_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 8
+          },
+          {
+            "tag": "hunt_r11_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 8
+          },
+          {
+            "tag": "hunt_r11_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 8
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 12,
+        "elapsed_ms": 19,
+        "results": [
+          {
+            "tag": "hunt_r12_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 15
+          },
+          {
+            "tag": "hunt_r12_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 16
+          },
+          {
+            "tag": "hunt_r12_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 15
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 13,
+        "elapsed_ms": 14,
+        "results": [
+          {
+            "tag": "hunt_r13_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 9
+          },
+          {
+            "tag": "hunt_r13_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 13
+          },
+          {
+            "tag": "hunt_r13_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 12
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 14,
+        "elapsed_ms": 6,
+        "results": [
+          {
+            "tag": "hunt_r14_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 6
+          },
+          {
+            "tag": "hunt_r14_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 6
+          },
+          {
+            "tag": "hunt_r14_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 6
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 15,
+        "elapsed_ms": 11,
+        "results": [
+          {
+            "tag": "hunt_r15_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 10
+          },
+          {
+            "tag": "hunt_r15_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 10
+          },
+          {
+            "tag": "hunt_r15_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 9
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 16,
+        "elapsed_ms": 9,
+        "results": [
+          {
+            "tag": "hunt_r16_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 8
+          },
+          {
+            "tag": "hunt_r16_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 8
+          },
+          {
+            "tag": "hunt_r16_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 7
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 17,
+        "elapsed_ms": 13,
+        "results": [
+          {
+            "tag": "hunt_r17_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 10
+          },
+          {
+            "tag": "hunt_r17_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 12
+          },
+          {
+            "tag": "hunt_r17_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 11
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 18,
+        "elapsed_ms": 11,
+        "results": [
+          {
+            "tag": "hunt_r18_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 9
+          },
+          {
+            "tag": "hunt_r18_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 8
+          },
+          {
+            "tag": "hunt_r18_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 7
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      },
+      {
+        "round": 19,
+        "elapsed_ms": 12,
+        "results": [
+          {
+            "tag": "hunt_r19_c0",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 11
+          },
+          {
+            "tag": "hunt_r19_c1",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 11
+          },
+          {
+            "tag": "hunt_r19_c2",
+            "status_code": 200,
+            "body": {
+              "queued": 0,
+              "video_ids": []
+            },
+            "url": "http://localhost:8421/api/video/proxy/batch",
+            "latency_ms": 11
+          }
+        ],
+        "phase_snap": {
+          "23": "generating",
+          "31": "queued",
+          "40": "queued"
+        }
+      }
+    ]
+  },
+  "phase4": {
+    "steps": [
+      {
+        "step": "p4_0_pre_reset",
+        "per_id": {
+          "23": {
+            "status_code": 200,
+            "body": {
+              "phase": "generating",
+              "percent": 0,
+              "message": "转码中 0%",
+              "updated_at": 1772290048.024401
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/23",
+            "latency_ms": 5
+          },
+          "31": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/31",
+            "latency_ms": 4
+          },
+          "40": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/40",
+            "latency_ms": 5
+          }
+        }
+      },
+      {
+        "step": "p4_1_concurrent",
+        "elapsed_ms": 3,
+        "call_a": {
+          "tag": "p4_batch_recover_ids",
+          "status_code": 200,
+          "body": {
+            "queued": 0,
+            "video_ids": []
+          },
+          "url": "http://localhost:8421/api/video/proxy/batch",
+          "latency_ms": 2
+        },
+        "call_b": {
+          "tag": "p4_batch_batch_ids",
+          "status_code": 200,
+          "body": {
+            "queued": 0,
+            "video_ids": []
+          },
+          "url": "http://localhost:8421/api/video/proxy/batch",
+          "latency_ms": 2
+        }
+      },
+      {
+        "step": "p4_2_post_status",
+        "status_code": 200,
+        "body": {
+          "total": 158,
+          "none": 0,
+          "queued": 2,
+          "generating": 1,
+          "done": 147,
+          "failed": 8
+        },
+        "url": "http://localhost:8421/api/video/proxy/status",
+        "latency_ms": 2
+      },
+      {
+        "step": "p4_2_post_progress",
+        "per_id": {
+          "23": {
+            "status_code": 200,
+            "body": {
+              "phase": "generating",
+              "percent": 0,
+              "message": "转码中 0%",
+              "updated_at": 1772290048.024401
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/23",
+            "latency_ms": 4
+          },
+          "31": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/31",
+            "latency_ms": 2
+          },
+          "40": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/40",
+            "latency_ms": 1
+          }
+        }
+      }
+    ],
+    "overlap_vid": 31,
+    "recover_ids": [
+      23,
+      31
+    ],
+    "batch_ids": [
+      31,
+      40
+    ]
+  },
+  "phase5": {
+    "steps": [
+      {
+        "step": "p5_0_kill_ffmpeg",
+        "ts": 516276.771555583
+      },
+      {
+        "step": "p5_0_reset_db_to_failed",
+        "reset_ids": [
+          23,
+          31,
+          40
+        ]
+      },
+      {
+        "step": "p5_0_backend_restarted",
+        "ready": true
+      },
+      {
+        "step": "p5_1_pre_state",
+        "per_id": {
+          "23": {
+            "status_code": 200,
+            "body": {
+              "phase": "failed",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/23",
+            "latency_ms": 3
+          },
+          "31": {
+            "status_code": 200,
+            "body": {
+              "phase": "failed",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/31",
+            "latency_ms": 1
+          },
+          "40": {
+            "status_code": 200,
+            "body": {
+              "phase": "failed",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/40",
+            "latency_ms": 2
+          }
+        }
+      },
+      {
+        "step": "p5_1_pre_status",
+        "status_code": 200,
+        "body": {
+          "total": 158,
+          "none": 0,
+          "queued": 0,
+          "generating": 0,
+          "done": 147,
+          "failed": 11
+        },
+        "url": "http://localhost:8421/api/video/proxy/status",
+        "latency_ms": 2
+      },
+      {
+        "step": "p5_2_concurrent",
+        "elapsed_ms": 3,
+        "group_a": {
+          "tag": "p5_group_a",
+          "status_code": 200,
+          "body": {
+            "queued": 2,
+            "video_ids": [
+              23,
+              31
+            ]
+          },
+          "url": "http://localhost:8421/api/video/proxy/batch",
+          "latency_ms": 3
+        },
+        "group_b": {
+          "tag": "p5_group_b",
+          "status_code": 200,
+          "body": {
+            "queued": 1,
+            "video_ids": [
+              40
+            ]
+          },
+          "url": "http://localhost:8421/api/video/proxy/batch",
+          "latency_ms": 3
+        }
+      },
+      {
+        "step": "p5_3_post_status",
+        "status_code": 200,
+        "body": {
+          "total": 158,
+          "none": 0,
+          "queued": 2,
+          "generating": 1,
+          "done": 147,
+          "failed": 8
+        },
+        "url": "http://localhost:8421/api/video/proxy/status",
+        "latency_ms": 9
+      },
+      {
+        "step": "p5_3_post_progress",
+        "per_id": {
+          "23": {
+            "status_code": 200,
+            "body": {
+              "phase": "generating",
+              "percent": 0,
+              "message": "转码中 0%",
+              "updated_at": 1772290059.318491
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/23",
+            "latency_ms": 6
+          },
+          "31": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/31",
+            "latency_ms": 5
+          },
+          "40": {
+            "status_code": 200,
+            "body": {
+              "phase": "queued",
+              "percent": 0,
+              "message": "",
+              "updated_at": 0
+            },
+            "url": "http://localhost:8421/api/video/proxy/progress/40",
+            "latency_ms": 5
+          }
+        }
+      },
+      {
+        "step": "p5_4_polling",
+        "polls": [
+          {
+            "poll": 0,
+            "status": {
+              "status_code": 200,
+              "body": {
+                "total": 158,
+                "none": 0,
+                "queued": 2,
+                "generating": 1,
+                "done": 147,
+                "failed": 8
+              },
+              "url": "http://localhost:8421/api/video/proxy/status",
+              "latency_ms": 5
+            },
+            "per_id": {
+              "23": {
+                "status_code": 200,
+                "body": {
+                  "phase": "generating",
+                  "percent": 0,
+                  "message": "转码中 0%",
+                  "updated_at": 1772290059.318491
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/23",
+                "latency_ms": 2
+              },
+              "31": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/31",
+                "latency_ms": 2
+              },
+              "40": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/40",
+                "latency_ms": 4
+              }
+            }
+          },
+          {
+            "poll": 1,
+            "status": {
+              "status_code": 200,
+              "body": {
+                "total": 158,
+                "none": 0,
+                "queued": 2,
+                "generating": 1,
+                "done": 147,
+                "failed": 8
+              },
+              "url": "http://localhost:8421/api/video/proxy/status",
+              "latency_ms": 4
+            },
+            "per_id": {
+              "23": {
+                "status_code": 200,
+                "body": {
+                  "phase": "generating",
+                  "percent": 0,
+                  "message": "转码中 0%",
+                  "updated_at": 1772290059.318491
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/23",
+                "latency_ms": 3
+              },
+              "31": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/31",
+                "latency_ms": 2
+              },
+              "40": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/40",
+                "latency_ms": 3
+              }
+            }
+          },
+          {
+            "poll": 2,
+            "status": {
+              "status_code": 200,
+              "body": {
+                "total": 158,
+                "none": 0,
+                "queued": 2,
+                "generating": 1,
+                "done": 147,
+                "failed": 8
+              },
+              "url": "http://localhost:8421/api/video/proxy/status",
+              "latency_ms": 4
+            },
+            "per_id": {
+              "23": {
+                "status_code": 200,
+                "body": {
+                  "phase": "generating",
+                  "percent": 0,
+                  "message": "转码中 0%",
+                  "updated_at": 1772290059.318491
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/23",
+                "latency_ms": 3
+              },
+              "31": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/31",
+                "latency_ms": 6
+              },
+              "40": {
+                "status_code": 200,
+                "body": {
+                  "phase": "queued",
+                  "percent": 0,
+                  "message": "",
+                  "updated_at": 0
+                },
+                "url": "http://localhost:8421/api/video/proxy/progress/40",
+                "latency_ms": 3
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "groups": {
+      "a": [
+        23,
+        31
+      ],
+      "b": [
+        31,
+        40
+      ],
+      "overlap": 31
+    }
+  },
+  "assertions": [
+    {
+      "id": "P1_A1_no_dup",
+      "desc": "[Phase1] 两次并发 batch 返回的 video_ids 无交集",
+      "a_ids": [
+        23,
+        31,
+        40
+      ],
+      "b_ids": [],
+      "overlap": [],
+      "pass": true
+    },
+    {
+      "id": "P1_A2_count",
+      "desc": "[Phase1] 合并 queued == len(test_ids)，video_ids 完整覆盖",
+      "total_queued": 3,
+      "expected": 3,
+      "union": [
+        23,
+        31,
+        40
+      ],
+      "test_ids": [
+        23,
+        31,
+        40
+      ],
+      "pass": true
+    },
+    {
+      "id": "P2_A_no_regress",
+      "desc": "[Phase2] generating_vid=23 冲击后不回退为 queued",
+      "pre_phase": "generating",
+      "post_phase": "generating",
+      "pass": true
+    },
+    {
+      "id": "P2_B_batch_excludes",
+      "desc": "[Phase2] attack_batch 不含 generating_vid=23",
+      "batch_returned": [],
+      "pass": true
+    },
+    {
+      "id": "P2_C_single_409",
+      "desc": "[Phase2] single POST /registry/23/proxy → 409",
+      "status_code": 409,
+      "pass": true
+    },
+    {
+      "id": "P2_D_monotonic",
+      "desc": "[Phase2] 状态单调递进（pre + post + 4 polls = 6 采样点）",
+      "sample_points": 6,
+      "history": {
+        "23": [
+          "generating",
+          "generating",
+          "generating",
+          "generating",
+          "generating",
+          "generating"
+        ],
+        "31": [
+          "queued",
+          "queued",
+          "queued",
+          "queued",
+          "queued",
+          "queued"
+        ],
+        "40": [
+          "queued",
+          "queued",
+          "queued",
+          "queued",
+          "queued",
+          "queued"
+        ]
+      },
+      "violations": [],
+      "pass": true
+    },
+    {
+      "id": "P2_E_status_exact",
+      "desc": "[Phase2] proxy/status qg 增量 == batch 新增（容忍 worker 消费 ≤1）",
+      "pre_qg": 3,
+      "post_qg": 3,
+      "batch_new": 0,
+      "delta": 0,
+      "tolerance": 1,
+      "tolerance_source": "串行 worker + 300ms 采样窗口，最多 1 个任务完成 generating→done/failed",
+      "pass": true
+    },
+    {
+      "id": "P3_A_no_inflight_breach",
+      "desc": "[Phase3] 20轮×3并发 — 无 inflight 空窗击穿",
+      "total_requests": 60,
+      "breach_count": 0,
+      "breaches": [],
+      "pass": true
+    },
+    {
+      "id": "P3_B_monotonic",
+      "desc": "[Phase3] gap-hunting 全程状态单调递进",
+      "violations": [],
+      "pass": true
+    },
+    {
+      "id": "P3_C_no_requeue",
+      "desc": "[Phase3] Phase2+3 累计 queued == 0（所有 vid 已在 Phase1 入队）",
+      "p23_total_queued": 0,
+      "pass": true
+    },
+    {
+      "id": "P4_A_overlap_no_dup",
+      "desc": "[Phase4] 重叠 vid=31 不在两方返回中同时出现",
+      "call_a_vids": [],
+      "call_b_vids": [],
+      "overlap_returned": [],
+      "pass": true
+    },
+    {
+      "id": "P4_B_union_count",
+      "desc": "[Phase4] 合并 queued 数 == 去重后 video_ids 数",
+      "total_queued": 0,
+      "union_vids": [],
+      "union_count": 0,
+      "pass": true
+    },
+    {
+      "id": "P4_C_overlap_coherent",
+      "desc": "[Phase4] 重叠 vid=31 冲击后状态一致（非矛盾）",
+      "overlap_vid": 31,
+      "phase_after": "queued",
+      "pass": true
+    },
+    {
+      "id": "P5_A_overlap_once",
+      "desc": "[Phase5] fresh-failed 重叠 vid=31 恰好被一方入队",
+      "group_a_vids": [
+        23,
+        31
+      ],
+      "group_b_vids": [
+        40
+      ],
+      "overlap_returned": [],
+      "overlap_in_a": true,
+      "overlap_in_b": false,
+      "pass": true
+    },
+    {
+      "id": "P5_B_total_exact",
+      "desc": "[Phase5] 合并 queued == 3（每个 fresh-failed vid 恰好入队 1 次）",
+      "total_queued": 3,
+      "expected": 3,
+      "union_vids": [
+        23,
+        31,
+        40
+      ],
+      "test_ids": [
+        23,
+        31,
+        40
+      ],
+      "pass": true
+    },
+    {
+      "id": "P5_C_all_enqueued",
+      "desc": "[Phase5] 冲击后全部 3 个 vid 进入 queued/generating（无 failed 残留）",
+      "phases": {
+        "23": "generating",
+        "31": "queued",
+        "40": "queued"
+      },
+      "pass": true
+    },
+    {
+      "id": "P5_D_status_delta",
+      "desc": "[Phase5] proxy/status qg 增量 == 3（容忍 worker 消费 ≤1）",
+      "pre_qg": 0,
+      "post_qg": 3,
+      "delta": 3,
+      "pass": true
+    },
+    {
+      "id": "P5_E_monotonic",
+      "desc": "[Phase5] 状态单调递进（pre + post + 3 polls = 5 采样点）",
+      "history": {
+        "23": [
+          "failed",
+          "generating",
+          "generating",
+          "generating",
+          "generating"
+        ],
+        "31": [
+          "failed",
+          "queued",
+          "queued",
+          "queued",
+          "queued"
+        ],
+        "40": [
+          "failed",
+          "queued",
+          "queued",
+          "queued",
+          "queued"
+        ]
+      },
+      "violations": [],
+      "pass": true
+    }
+  ],
+  "inflight_gap_analysis": {
+    "total_hunt_rounds": 20,
+    "total_hunt_requests": 60,
+    "effective_rounds_with_generating": 20,
+    "breach_count": 0,
+    "conclusion": "共 20 轮 × 3 并发 = 60 次 batch 请求。其中 20 轮存在 generating 状态的 vid（有效冲击）。 未击穿 _batch_inflight 保护。",
+    "hit_inflight_scenario": true,
+    "inflight_held": true
+  },
+  "verdict": "ALL PASS — 口径已对齐，封板通过（v5）",
+  "seal": {
+    "uncovered_items": [
+      "服务重启中途队列丢失（进程内存队列无持久化，与原始 create_task 行为一致，非回归）",
+      "超大批量（>100 vid）并发入队的性能/锁争用（功能正确性已覆盖，压测不在此脚本范围）"
+    ],
+    "note": "以上为已知不覆盖项，均为非回归或压测范畴，不影响功能正确性封板。"
+  }
+}
