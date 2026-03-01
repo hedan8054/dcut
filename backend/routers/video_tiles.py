@@ -222,7 +222,7 @@ async def request_tile_stream(body: TileRequestIn):
     frame_queue: asyncio.Queue = asyncio.Queue()
     scheduler = await ensure_scheduler_started()
     priority = Priority(min(body.priority, 2))
-    await scheduler.submit(
+    task = await scheduler.submit(
         spec,
         priority,
         on_frame_ready=frame_queue,
@@ -232,18 +232,29 @@ async def request_tile_stream(body: TileRequestIn):
     async def sse_generator():
         """SSE 事件生成器"""
         frame_count = 0
-        t0 = asyncio.get_event_loop().time()
+        loop = asyncio.get_event_loop()
+        t0 = loop.time()
+        idle_heartbeat_sec = 10.0
 
         try:
             while True:
                 try:
-                    item = await asyncio.wait_for(frame_queue.get(), timeout=30.0)
+                    item = await asyncio.wait_for(frame_queue.get(), timeout=idle_heartbeat_sec)
                 except asyncio.TimeoutError:
-                    yield f"event: error\ndata: {json.dumps({'message': 'timeout'})}\n\n"
-                    break
+                    # 提取链路可能在队列中等待或后台处理中，避免将“空闲等待”误判成网络超时
+                    if task.future and task.future.done():
+                        result = task.future.result()
+                        if result.error:
+                            yield f"event: error\ndata: {json.dumps({'message': result.error})}\n\n"
+                        else:
+                            elapsed = (loop.time() - t0) * 1000
+                            yield f"event: complete\ndata: {json.dumps({'frame_count': frame_count, 'elapsed_ms': round(elapsed, 1)})}\n\n"
+                        break
+                    yield f"event: keepalive\ndata: {json.dumps({'waiting_sec': round(loop.time() - t0, 1)})}\n\n"
+                    continue
 
                 if item is None:
-                    elapsed = (asyncio.get_event_loop().time() - t0) * 1000
+                    elapsed = (loop.time() - t0) * 1000
                     yield f"event: complete\ndata: {json.dumps({'frame_count': frame_count, 'elapsed_ms': round(elapsed, 1)})}\n\n"
                     break
 
@@ -251,9 +262,14 @@ async def request_tile_stream(body: TileRequestIn):
                 yield f"event: frame\ndata: {json.dumps(item)}\n\n"
 
         except asyncio.CancelledError:
+            # 客户端断开时标记取消，worker 在未开始执行时可直接跳过
+            task.cancelled = True
             raise
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+        finally:
+            if task.future and not task.future.done():
+                task.cancelled = True
 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
 

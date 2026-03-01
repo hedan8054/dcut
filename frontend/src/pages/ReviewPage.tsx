@@ -146,6 +146,8 @@ export default function ReviewPage() {
     loading: frameLoading,
     progress: frameProgress,
     version: frameVersion,
+    frameError,
+    retry: retryFrames,
   } = framesHook
 
   const l2Frames = useMemo(
@@ -158,13 +160,52 @@ export default function ReviewPage() {
     [getFrames, focusRange, frameVersion],
   )
 
+  const l2SampleFrames = useMemo(
+    () => l2Frames.filter((f) => !!f.url),
+    [l2Frames],
+  )
+
   const timelineFrames = useMemo(() => {
     if (l3Frames.length === 0) return l2Frames
-    const l3Start = l3Frames[0].timestamp
-    const l3End = l3Frames[l3Frames.length - 1].timestamp
-    const l2Before = l2Frames.filter(f => f.timestamp < l3Start)
-    const l2After = l2Frames.filter(f => f.timestamp > l3End)
-    return [...l2Before, ...l3Frames, ...l2After]
+
+    // L3 仅在有图时覆盖 L2；空槽位优先保留/回填 L2，避免“黑段”断层
+    const merged = new Map<number, (typeof l2Frames)[number]>()
+    for (const frame of l2Frames) merged.set(frame.timestamp, frame)
+    const l2Loaded = l2Frames.filter((f) => !!f.url)
+
+    const findNearestL2 = (ts: number): string => {
+      if (l2Loaded.length === 0) return ''
+      let lo = 0
+      let hi = l2Loaded.length - 1
+      while (lo <= hi) {
+        const mid = Math.floor((lo + hi) / 2)
+        const v = l2Loaded[mid].timestamp
+        if (v === ts) return l2Loaded[mid].url
+        if (v < ts) lo = mid + 1
+        else hi = mid - 1
+      }
+      const left = hi >= 0 ? l2Loaded[hi] : null
+      const right = lo < l2Loaded.length ? l2Loaded[lo] : null
+      if (!left && !right) return ''
+      if (!left) return right?.url ?? ''
+      if (!right) return left.url
+      return Math.abs(ts - left.timestamp) <= Math.abs(right.timestamp - ts) ? left.url : right.url
+    }
+
+    for (const frame of l3Frames) {
+      const prev = merged.get(frame.timestamp)
+      if (frame.url) {
+        merged.set(frame.timestamp, frame)
+      } else if (prev?.url) {
+        // 已有可用 L2 帧，保持不变
+      } else {
+        const backfill = findNearestL2(frame.timestamp)
+        if (backfill) merged.set(frame.timestamp, { timestamp: frame.timestamp, url: backfill })
+        else if (!prev) merged.set(frame.timestamp, frame)
+      }
+    }
+
+    return Array.from(merged.values()).sort((a, b) => a.timestamp - b.timestamp)
   }, [l2Frames, l3Frames])
 
   const timelineLoading = frameLoading.L2 || frameLoading.L3
@@ -195,6 +236,19 @@ export default function ReviewPage() {
     }
     return result
   }, [videoDuration, videoPath, videoId, extendRange, showUiHint])
+
+  // U2: 播放贴边自动扩窗 — playbackSec 接近 focusRange 末端时触发
+  const lastPlaybackExpandRef = useRef(0)
+  useEffect(() => {
+    if (!isPlaying || !videoPath) return
+    const threshold = focusRangeRef.current[1] - 30
+    if (playbackSec >= threshold && playbackSec < focusRangeRef.current[1]) {
+      const now = Date.now()
+      if (now - lastPlaybackExpandRef.current < 5000) return  // 5s 节流
+      lastPlaybackExpandRef.current = now
+      handleAutoExpand('right', 60)
+    }
+  }, [playbackSec, isPlaying, videoPath, handleAutoExpand])
 
   const autoExpand = useAutoExpand({
     videoDuration,
@@ -805,7 +859,7 @@ export default function ReviewPage() {
                   focusRange={focusRange}
                   onFocusRangeChange={handleFocusRangeChange}
                   frames={timelineFrames}
-                  sampleFrames={l2Frames}
+                  sampleFrames={l2SampleFrames}
                   loading={timelineLoading}
                   progress={timelineProgress}
                   capsules={capsules}
@@ -822,6 +876,9 @@ export default function ReviewPage() {
                   edgeHitBoundary={autoExpand.hitBoundary}
                   edgePreExpand={autoExpand.preExpand}
                   edgeCurrentStep={autoExpand.currentStep}
+                  frameError={frameError}
+                  onRetry={retryFrames}
+                  onPlaybackSeek={(sec) => { videoControlRef.current?.seek?.(sec) }}
                 />
               )}
 

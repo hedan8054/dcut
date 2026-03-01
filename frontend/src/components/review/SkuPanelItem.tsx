@@ -8,15 +8,19 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   getVideoStreamUrl,
-  batchGenerateProxy,
+  generateProxy,
   fetchVideoRegistryById,
+  fetchProxyProgress,
+  auditProxyHealth,
 } from '@/api/client'
+import type { ProxyProgress } from '@/api/client'
 import { useReviewStore } from '@/stores/reviewStore'
 import type { EnrichedPlanItem, SkuImage, SessionGroup, VideoControl, VideoRegistry } from '@/types'
 import { formatDuration } from '@/lib/format'
 
 type PreviewState = 'idle' | 'loading' | 'playable' | 'error' | 'generating_proxy'
 type SourceType = 'raw' | 'proxy' | null
+type ProxyToolLevel = 'ok' | 'warn' | 'error'
 
 interface Props {
   item: EnrichedPlanItem
@@ -40,7 +44,6 @@ export function SkuPanelItem({
   onSelect, onToggleExpand,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const pollTimerRef = useRef<number | null>(null)
   const loadTimeoutRef = useRef<number | null>(null)
   const [playing, setPlaying] = useState(false)
   const [hasFrame, setHasFrame] = useState(false) // 是否已解码出至少一帧
@@ -48,19 +51,16 @@ export function SkuPanelItem({
   const [sourcePath, setSourcePath] = useState('')
   const [previewState, setPreviewState] = useState<PreviewState>('idle')
   const [errorMessage, setErrorMessage] = useState('')
+  const [proxyToolBusy, setProxyToolBusy] = useState<'' | 'audit' | 'fix'>('')
+  const [proxyToolNote, setProxyToolNote] = useState<{ level: ProxyToolLevel; text: string } | null>(null)
+  const [proxyProgress, setProxyProgress] = useState<ProxyProgress | null>(null)
+  const progressTimerRef = useRef<number | null>(null)
   const canPreciseSeek = sourceType === 'proxy'
 
   const totalRecordings = sessions.length
   const totalVerified = sessions.reduce((s, g) => s + g.verified_count, 0)
   const totalDuration = sessions.reduce((s, g) => s + (g.video?.duration_sec ?? 0), 0)
   const mainImage = skuImages.find(i => i.image_type === 'main') ?? skuImages[0]
-
-  const clearPolling = useCallback(() => {
-    if (pollTimerRef.current !== null) {
-      window.clearInterval(pollTimerRef.current)
-      pollTimerRef.current = null
-    }
-  }, [])
 
   const clearLoadTimeout = useCallback(() => {
     if (loadTimeoutRef.current !== null) {
@@ -69,12 +69,55 @@ export function SkuPanelItem({
     }
   }, [])
 
+  const clearProgressPolling = useCallback(() => {
+    if (progressTimerRef.current !== null) {
+      window.clearInterval(progressTimerRef.current)
+      progressTimerRef.current = null
+    }
+  }, [])
+
+  const startProgressPolling = useCallback((videoId: number) => {
+    clearProgressPolling()
+    const poll = async () => {
+      try {
+        const p = await fetchProxyProgress(videoId)
+        setProxyProgress(p)
+        // 轮询驱动终态: done → 刷新视频源; failed → 显示错误
+        if (p.phase === 'done') {
+          clearProgressPolling()
+          setProxyToolBusy('')
+          setPreviewState('loading')
+          try {
+            const latest = await fetchVideoRegistryById(videoId)
+            onVideoInfoUpdate(latest)
+            if (latest.proxy_status === 'done' && latest.proxy_path) {
+              setSourceType('proxy')
+              setSourcePath(latest.proxy_path)
+              setProxyToolNote({ level: 'ok', text: '修复完成，代理已就绪' })
+            }
+          } catch { /* 刷新失败不致命 */ }
+          setTimeout(() => setProxyProgress(null), 3000)
+        } else if (p.phase === 'failed') {
+          clearProgressPolling()
+          setProxyToolBusy('')
+          setPreviewState('error')
+          setErrorMessage(`修复代理失败: ${p.message || '未知原因'}`)
+        }
+      } catch {
+        // 网络错误 → 优雅降级，继续轮询
+        setProxyProgress({ phase: 'generating', percent: -1, message: '修复中（无进度）', updated_at: 0 })
+      }
+    }
+    poll()
+    progressTimerRef.current = window.setInterval(poll, 1500)
+  }, [clearProgressPolling, onVideoInfoUpdate])
+
   useEffect(() => {
     return () => {
-      clearPolling()
       clearLoadTimeout()
+      clearProgressPolling()
     }
-  }, [clearLoadTimeout, clearPolling])
+  }, [clearLoadTimeout, clearProgressPolling])
 
   // 暴露视频控制接口给 ReviewPage（通过 ref）
   const setPlaybackSec = useReviewStore(s => s.setPlaybackSec)
@@ -92,6 +135,11 @@ export function SkuPanelItem({
       pause() {
         videoRef.current?.pause()
       },
+      seek(sec: number) {
+        const vid = videoRef.current
+        if (!vid) return
+        vid.currentTime = sec
+      },
       getCurrentTime() {
         return videoRef.current?.currentTime ?? 0
       },
@@ -103,6 +151,7 @@ export function SkuPanelItem({
     if (!isExpanded) return
     setPlaying(false)
     setErrorMessage('')
+    setProxyToolNote(null)
 
     // proxy 优先（.mp4 容器音画同步好），raw .ts 作为 fallback
     if (videoInfo?.proxy_status === 'done' && videoInfo.proxy_path) {
@@ -159,24 +208,26 @@ export function SkuPanelItem({
     }
     clearLoadTimeout()
     loadTimeoutRef.current = window.setTimeout(() => {
+      // 视频已有帧输出（onTimeUpdate 至少触发过一次），不是真超时
+      if (hasFrame) return
       if (sourceType === 'raw' && switchToProxy()) return
       const ext = sourcePath.split('.').pop()?.toLowerCase() || ''
       if (ext === 'ts' || ext === 'mkv' || ext === 'flv') {
-        setErrorMessage('原始视频格式兼容性较差，建议点击“生成代理”后预览')
+        setErrorMessage('原始视频格式兼容性较差，建议点击"修复代理"后预览')
       } else {
-        setErrorMessage('视频加载超时，请重试或生成代理')
+        setErrorMessage('视频加载超时，请重试或点击"修复代理"')
       }
       setPreviewState('error')
     }, 8000)
     return () => clearLoadTimeout()
-  }, [clearLoadTimeout, previewState, sourcePath, sourceType, switchToProxy])
+  }, [clearLoadTimeout, hasFrame, previewState, sourcePath, sourceType, switchToProxy])
 
   const onVideoError = useCallback(() => {
     setPlaying(false)
     setHasFrame(false)
     if (sourceType === 'raw' && switchToProxy()) return
     setPreviewState('error')
-    setErrorMessage('当前视频源不可播放，可尝试生成代理后重试')
+    setErrorMessage('当前视频源不可播放，可尝试"修复代理"后重试')
   }, [sourceType, switchToProxy])
 
   const togglePlay = useCallback((e: React.MouseEvent) => {
@@ -195,7 +246,7 @@ export function SkuPanelItem({
           setPlaying(false)
           setPreviewState('error')
           if (errName === 'NotSupportedError') {
-            setErrorMessage('当前浏览器不支持该视频格式，请点击“生成代理”后预览')
+            setErrorMessage('当前浏览器不支持该视频格式，请点击"修复代理"后预览')
           } else {
             setErrorMessage('播放启动失败，请检查视频源')
           }
@@ -206,52 +257,62 @@ export function SkuPanelItem({
     }
   }, [previewState, sourceType, switchToProxy])
 
-  const startProxyPolling = useCallback((videoId: number) => {
-    clearPolling()
-    let tries = 0
-    pollTimerRef.current = window.setInterval(async () => {
-      tries += 1
-      try {
-        const latest = await fetchVideoRegistryById(videoId)
-        onVideoInfoUpdate(latest)
-        if (latest.proxy_status === 'done' && latest.proxy_path) {
-          clearPolling()
-          setSourceType('proxy')
-          setSourcePath(latest.proxy_path)
-          setPreviewState('loading')
-          setErrorMessage('')
-          return
-        }
-        if (latest.proxy_status === 'failed') {
-          clearPolling()
-          setPreviewState('error')
-          setErrorMessage('代理生成失败，请检查原始视频后重试')
-          return
-        }
-      } catch {
-        // keep polling
-      }
-      if (tries >= 60) {
-        clearPolling()
-        setPreviewState('error')
-        setErrorMessage('代理生成超时，请稍后刷新重试')
-      }
-    }, 2000)
-  }, [clearPolling, onVideoInfoUpdate])
-
-  const handleGenerateProxy = useCallback(async () => {
+  const handleFixProxy = useCallback(async () => {
     if (!videoInfo?.id) return
-    setPreviewState('generating_proxy')
+    setProxyToolBusy('fix')
+    setProxyToolNote(null)
+    setProxyProgress(null)
     setErrorMessage('')
     setPlaying(false)
+    setPreviewState('generating_proxy')
+
     try {
-      await batchGenerateProxy([videoInfo.id], false)
-      startProxyPolling(videoInfo.id)
+      // POST 立即返回 accepted，不等转码完成
+      await generateProxy(videoInfo.id)
     } catch (err) {
-      setPreviewState('error')
-      setErrorMessage(`生成代理失败: ${err instanceof Error ? err.message : String(err)}`)
+      // 只有 POST 本身失败才报错（如 409 重复/404 不存在）
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('409')) {
+        // 任务已在运行，直接开始轮询
+      } else {
+        setPreviewState('error')
+        setErrorMessage(`启动修复失败: ${msg}`)
+        setProxyToolBusy('')
+        return
+      }
     }
-  }, [videoInfo, startProxyPolling])
+    // 纯轮询驱动：完成/失败由轮询回调处理
+    startProgressPolling(videoInfo.id)
+  }, [videoInfo, startProgressPolling])
+
+  const handleAuditProxy = useCallback(async () => {
+    if (!videoInfo?.id) return
+    setProxyToolBusy('audit')
+    setProxyToolNote(null)
+    try {
+      const res = await auditProxyHealth([videoInfo.id], 0)
+      const bad = res.bad.find(item => item.video_id === videoInfo.id)
+      if (!bad) {
+        setProxyToolNote({ level: 'ok', text: '检测通过：未发现代理音画异常' })
+      } else {
+        const reasons = bad.reasons?.join(', ') || 'unknown'
+        setProxyToolNote({
+          level: 'warn',
+          text: `检测异常：${reasons}（v=${bad.video_duration?.toFixed(1) ?? '-'}s, a=${bad.audio_duration?.toFixed(1) ?? '-'}s）`,
+        })
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('404') && msg.includes('Not Found')) {
+        setProxyToolNote({ level: 'error', text: '检测失败：后端缺少新接口（/proxy/audit）。请重启后端服务后重试。' })
+      } else {
+        setProxyToolNote({ level: 'error', text: `检测失败: ${msg}` })
+      }
+    } finally {
+      setProxyToolBusy('')
+    }
+  }, [videoInfo?.id])
+
 
   if (isExpanded) {
     return (
@@ -357,20 +418,82 @@ export function SkuPanelItem({
             <div className="flex items-center justify-between mb-1">
               <p className="text-[11px] text-muted-foreground">竖幅预览</p>
               {videoInfo?.id && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-[11px]"
-                  onClick={handleGenerateProxy}
-                  disabled={previewState === 'generating_proxy'}
-                >
-                  {previewState === 'generating_proxy' && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
-                  生成代理
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-[11px]"
+                    onClick={handleAuditProxy}
+                    disabled={previewState === 'generating_proxy' || proxyToolBusy !== ''}
+                  >
+                    {proxyToolBusy === 'audit' && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
+                    检测代理
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-[11px]"
+                    onClick={handleFixProxy}
+                    disabled={previewState === 'generating_proxy' || proxyToolBusy !== ''}
+                  >
+                    {(previewState === 'generating_proxy' || proxyToolBusy === 'fix') && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
+                    修复代理
+                  </Button>
+                </div>
               )}
             </div>
 
-	            <div className="w-full aspect-[9/16] bg-black rounded overflow-hidden relative">
+            {proxyProgress && (
+              <div className="mb-1">
+                <div className="flex items-center justify-between text-[10px] mb-0.5">
+                  <span className={
+                    proxyProgress.phase === 'failed' ? 'text-red-400'
+                      : proxyProgress.phase === 'done' ? 'text-emerald-300'
+                        : 'text-amber-300'
+                  }>
+                    {proxyProgress.phase === 'queued' ? '排队中'
+                      : proxyProgress.phase === 'generating' ? (proxyProgress.percent >= 0 ? `转码中 ${proxyProgress.percent}%` : '修复中（无进度）')
+                        : proxyProgress.phase === 'validating' ? '验收中'
+                          : proxyProgress.phase === 'done' ? '修复完成'
+                            : proxyProgress.phase === 'failed' ? '修复失败'
+                              : proxyProgress.message || proxyProgress.phase}
+                  </span>
+                  {proxyProgress.percent >= 0 && proxyProgress.phase !== 'done' && proxyProgress.phase !== 'failed' && (
+                    <span className="text-muted-foreground font-mono">{proxyProgress.percent}%</span>
+                  )}
+                </div>
+                {proxyProgress.percent >= 0 ? (
+                  <div className="h-1 bg-rv-border rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        proxyProgress.phase === 'failed' ? 'bg-red-500'
+                          : proxyProgress.phase === 'done' ? 'bg-emerald-400'
+                            : 'bg-amber-400'
+                      }`}
+                      style={{ width: `${Math.max(2, proxyProgress.percent)}%` }}
+                    />
+                  </div>
+                ) : (
+                  <div className="h-1 bg-rv-border rounded-full overflow-hidden">
+                    <div className="h-full w-1/3 bg-amber-400/60 rounded-full animate-pulse" />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {proxyToolNote && (
+              <div className={`mb-1 text-[11px] ${
+                proxyToolNote.level === 'error'
+                  ? 'text-red-400'
+                  : proxyToolNote.level === 'warn'
+                    ? 'text-amber-300'
+                    : 'text-emerald-300'
+              }`}>
+                {proxyToolNote.text}
+              </div>
+            )}
+
+            <div className="w-full aspect-[9/16] bg-black rounded overflow-hidden relative">
               {sourcePath ? (
                 <>
                   <video

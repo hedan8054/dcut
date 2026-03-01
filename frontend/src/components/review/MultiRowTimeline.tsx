@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Loader2, Monitor } from 'lucide-react'
+import { AlertTriangle, Loader2, Monitor, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { FocusRangeSlider } from './FocusRangeSlider'
 import { DiagPanel, useDiagState } from './DiagPanel'
 import { formatSec } from '@/lib/format'
-import type { FrameData } from '@/hooks/use-multi-res-frames'
+import type { FrameData, FrameError } from '@/hooks/use-multi-res-frames'
 import { useCapsuleGeometry, type FramePoint, type RowBounds } from '@/hooks/use-capsule-geometry'
 import { useDragInteraction } from '@/hooks/use-drag-interaction'
 import type { TimeRange } from '@/lib/timeline-range'
@@ -20,6 +20,7 @@ const LABEL_W = 76
 const ROW_GAP = 24
 const BOTTOM_RESERVED = 170
 const MIN_SPAN_SEC = 2
+const AUTO_ZOOM_MAX_ROWS = 8 // 超过此行数时自动提升 zoom 间隔
 const AUTO_SCROLL_EDGE_PX = 24
 const AUTO_SCROLL_MAX_PX = 18
 const DRAG_THRESHOLD_PX = 6
@@ -57,6 +58,12 @@ interface Props {
   edgePreExpand?: boolean
   /** 自动扩窗: 当前步长 10/20/30 或 null */
   edgeCurrentStep?: number | null
+  /** 帧加载错误 */
+  frameError?: FrameError | null
+  /** 重试回调 */
+  onRetry?: () => void
+  /** 橙针拖拽：seek 视频到指定秒 */
+  onPlaybackSeek?: (sec: number) => void
 }
 
 interface DisplayFrame extends FrameData {
@@ -183,6 +190,9 @@ export function MultiRowTimeline({
   edgeHitBoundary,
   edgePreExpand,
   edgeCurrentStep,
+  frameError,
+  onRetry,
+  onPlaybackSeek,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
@@ -234,23 +244,36 @@ export function MultiRowTimeline({
     return Array.from(map.values()).sort((a, b) => a.timestamp - b.timestamp)
   }, [frames])
 
-  // 按 zoomLevel 子采样，减少重复帧提高浏览效率
+  // 混合密度自动 zoom: L2(10s)+L3(1s) 合并后帧数过多时自动提升采样间隔
+  const effectiveZoom = useMemo(() => {
+    if (zoomLevel > 1) return zoomLevel // 用户手动设定，不覆盖
+    const maxFrames = framesPerRow * AUTO_ZOOM_MAX_ROWS
+    if (dedupedFrames.length <= maxFrames) return 1
+    const base = dedupedFrames[0]?.timestamp ?? 0
+    for (const z of [10, 30, 60]) {
+      const count = dedupedFrames.filter(f => Math.round(f.timestamp - base) % z === 0).length
+      if (count <= maxFrames) return z
+    }
+    return 60
+  }, [dedupedFrames, framesPerRow, zoomLevel])
+
+  // 按 effectiveZoom 子采样，减少重复帧提高浏览效率
   const zoomedFrames = useMemo(() => {
-    if (zoomLevel <= 1 || dedupedFrames.length === 0) return dedupedFrames
+    if (effectiveZoom <= 1 || dedupedFrames.length === 0) return dedupedFrames
     const base = dedupedFrames[0].timestamp
-    return dedupedFrames.filter(f => Math.round(f.timestamp - base) % zoomLevel === 0)
-  }, [dedupedFrames, zoomLevel])
+    return dedupedFrames.filter(f => Math.round(f.timestamp - base) % effectiveZoom === 0)
+  }, [dedupedFrames, effectiveZoom])
 
   const frameInterval = useMemo(() => {
-    if (zoomedFrames.length < 2) return Math.max(1, zoomLevel)
+    if (zoomedFrames.length < 2) return Math.max(1, effectiveZoom)
     let minDiff = Number.POSITIVE_INFINITY
     for (let i = 1; i < zoomedFrames.length; i++) {
       const diff = zoomedFrames[i].timestamp - zoomedFrames[i - 1].timestamp
       if (diff > 0 && diff < minDiff) minDiff = diff
     }
-    if (!Number.isFinite(minDiff)) return Math.max(1, zoomLevel)
+    if (!Number.isFinite(minDiff)) return Math.max(1, effectiveZoom)
     return Math.max(1, Math.round(minDiff))
-  }, [zoomedFrames, zoomLevel])
+  }, [zoomedFrames, effectiveZoom])
 
   const activeCapsule = useMemo(
     () => capsules.find(c => c.id === activeCapsuleId) ?? null,
@@ -295,7 +318,9 @@ export function MultiRowTimeline({
     // 为 active 胶囊用 sampleFrames（高精度），其他胶囊用 modulo 采样
     const activeSampleSet = new Set<number>()
     if (activeCapsuleId != null) {
-      for (const sf of sampleFrames) activeSampleSet.add(sf.timestamp)
+      for (const sf of sampleFrames) {
+        if (sf.url) activeSampleSet.add(sf.timestamp)
+      }
     }
 
     for (const frame of zoomedFrames) {
@@ -371,6 +396,11 @@ export function MultiRowTimeline({
     if (current.length > 0) packed.push(current)
     return packed
   }, [displayFrames, framesPerRow])
+
+  const loadedFrameCount = useMemo(
+    () => frames.reduce((acc, frame) => acc + (frame.url ? 1 : 0), 0),
+    [frames],
+  )
 
   const collectFrameLayout = useCallback(() => {
     const grid = gridRef.current
@@ -1082,7 +1112,7 @@ export function MultiRowTimeline({
             <button
               key={lvl}
               className={`px-1.5 py-0.5 text-[10px] font-mono rounded transition-colors ${
-                zoomLevel === lvl
+                effectiveZoom === lvl
                   ? 'bg-rv-accent text-black font-bold'
                   : 'bg-muted/50 text-muted-foreground hover:bg-muted'
               }`}
@@ -1091,6 +1121,9 @@ export function MultiRowTimeline({
               {lvl}s
             </button>
           ))}
+          {effectiveZoom !== zoomLevel && (
+            <span className="text-[10px] text-amber-400/80 font-mono ml-1">auto</span>
+          )}
         </div>
 
         <div className="flex-1" />
@@ -1113,9 +1146,25 @@ export function MultiRowTimeline({
         focusRange={focusRange}
         minSpanSec={20}
         onChange={onFocusRangeChange}
+        onEdgeHit={onEdgeHitCheck ? (dir) => onEdgeHitCheck(0, dir) : undefined}
+        onEdgeDragStop={onEdgeDragStop}
       />
 
-      {loading ? (
+      {frameError ? (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-destructive/10 border border-destructive/30 text-xs text-destructive">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          <span className="flex-1">{frameError.message}</span>
+          {frameError.retryable && onRetry && (
+            <button
+              onClick={onRetry}
+              className="flex items-center gap-1 px-2 py-0.5 rounded bg-destructive/20 hover:bg-destructive/30 transition-colors text-destructive font-medium"
+            >
+              <RefreshCw className="w-3 h-3" />
+              重试
+            </button>
+          )}
+        </div>
+      ) : loading ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="w-3 h-3 animate-spin" />
           <span>加载中 {progress[0]}/{progress[1]}</span>
@@ -1129,7 +1178,7 @@ export function MultiRowTimeline({
       ) : frames.length > 0 && (
         <div className="flex items-center gap-2 text-xs text-emerald-400">
           <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          就绪 · {frames.length} 帧可浏览，拖框创建胶囊
+          就绪 · {loadedFrameCount} 帧已就绪，拖框创建胶囊
         </div>
       )}
 
@@ -1213,14 +1262,38 @@ export function MultiRowTimeline({
                   }
                   return (
                     <>
-                      {/* 橙针（播放位置）— 在白针下层，空心矩形针头在帧上方 */}
+                      {/* 橙针（播放位置）— 在白针下层，可拖拽 seek */}
                       {playbackSec > 0 && playbackSec >= rowStart && playbackSec <= rowEnd && (
                         <div
-                          className="absolute top-0 pointer-events-none z-[2000]"
+                          className="absolute top-0 z-[2000]"
                           style={{ left: calcX(playbackSec), height: FRAME_H, transform: 'translateX(-50%)' }}
                         >
-                          <div className="absolute -top-[20px] left-1/2 -translate-x-1/2 w-[10px] h-[16px] border-[3px] border-orange-400 pointer-events-auto cursor-grab" />
-                          <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-orange-400/90" />
+                          <div
+                            className="absolute -top-[20px] left-1/2 -translate-x-1/2 w-[10px] h-[16px] border-[3px] border-orange-400 pointer-events-auto cursor-grab active:cursor-grabbing"
+                            onPointerDown={(e) => {
+                              if (!onPlaybackSeek) return
+                              e.preventDefault()
+                              e.stopPropagation()
+                              const track = (e.target as HTMLElement).closest('[data-timeline-track]') as HTMLElement | null
+                              if (!track) return
+                              // clientX → sec: 线性映射 track 宽度到 rowStart~rowEnd
+                              const calcSec = (cx: number) => {
+                                const rect = track.getBoundingClientRect()
+                                const ratio = Math.max(0, Math.min(1, (cx - rect.left) / rect.width))
+                                return rowStart + ratio * (rowEnd - rowStart)
+                              }
+                              const onMove = (me: PointerEvent) => {
+                                onPlaybackSeek(calcSec(me.clientX))
+                              }
+                              const onUp = () => {
+                                document.removeEventListener('pointermove', onMove)
+                                document.removeEventListener('pointerup', onUp)
+                              }
+                              document.addEventListener('pointermove', onMove)
+                              document.addEventListener('pointerup', onUp)
+                            }}
+                          />
+                          <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-orange-400/90 pointer-events-none" />
                         </div>
                       )}
                       {/* 白针（锚点/定位针）— 实心矩形针头在帧上方 */}

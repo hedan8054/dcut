@@ -91,6 +91,8 @@ export type CapsuleInteractionState = 'idle' | 'activating' | 'dragging'
 export interface VideoControl {
   play(fromSec?: number): void
   pause(): void
+  /** 只改 currentTime，不改播放/暂停状态 */
+  seek(sec: number): void
   getCurrentTime(): number
 }
 export type ReviewCapsuleStatus = 'draft' | 'bound' | 'final'

@@ -9,6 +9,8 @@ interface Props {
   focusRange: TimeRange
   minSpanSec?: number
   onChange: (range: TimeRange) => void
+  onEdgeHit?: (direction: 'left' | 'right') => void
+  onEdgeDragStop?: () => void
   mode?: 'focus' | 'selection'
   hitTimestamp?: number | null
 }
@@ -18,6 +20,8 @@ export function FocusRangeSlider({
   focusRange,
   minSpanSec: minSpanSecProp,
   onChange,
+  onEdgeHit,
+  onEdgeDragStop,
   mode = 'focus',
   hitTimestamp = null,
 }: Props) {
@@ -69,22 +73,27 @@ export function FocusRangeSlider({
       if (dragRef.current.mode === 'left') {
         const start = Math.max(coarseRange[0], Math.min(rawStart + dSec, rawEnd - minSpan))
         apply([start, rawEnd])
+        // 拖到左边界时触发扩窗
+        if (onEdgeHit && start <= coarseRange[0] + 0.5) onEdgeHit('left')
         return
       }
 
       const end = Math.min(coarseRange[1], Math.max(rawEnd + dSec, rawStart + minSpan))
       apply([rawStart, end])
+      // 拖到右边界时触发扩窗
+      if (onEdgeHit && end >= coarseRange[1] - 0.5) onEdgeHit('right')
     }
 
     const onUp = () => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
       dragRef.current = null
+      onEdgeDragStop?.()
     }
 
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [focusRange, coarseSpan, coarseRange, minSpanSec, apply, isSelectionMode])
+  }, [focusRange, coarseSpan, coarseRange, minSpanSec, apply, isSelectionMode, onEdgeHit, onEdgeDragStop])
 
   // 命中点标记位置 (selection 模式)
   const hitPct = useMemo(() => {
