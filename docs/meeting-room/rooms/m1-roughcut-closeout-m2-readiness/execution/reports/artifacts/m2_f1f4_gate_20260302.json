@@ -1,0 +1,92 @@
+{
+  "gate": "M2-F1F4",
+  "timestamp": "2026-03-02T21:10:00Z",
+  "verdict": "Full-Go",
+  "features": {
+    "F1_export_roughcut": "done",
+    "F2_edit_delete": "done",
+    "F3_clips_page": "done",
+    "F4_preview_download": "done"
+  },
+  "blocking_fixes": [
+    {
+      "id": "BLK-01",
+      "issue": "create-and-export swallows export errors, leaves dirty DB record",
+      "fix": "Pre-check Path.exists() → 400; ffmpeg failure → DELETE rollback + cleanup partial file → 500"
+    },
+    {
+      "id": "BLK-02",
+      "issue": "getClipDownloadUrl does not handle absolute paths from old data",
+      "fix": "Parse /data/ boundary to extract relative path; DB migration applied (1 row fixed)"
+    }
+  ],
+  "checks": [
+    {
+      "id": 1,
+      "name": "py_compile",
+      "target": "verified.py + ffmpeg_service.py",
+      "result": "PASS"
+    },
+    {
+      "id": 2,
+      "name": "tsc",
+      "command": "npx tsc -b --noEmit",
+      "result": "PASS",
+      "errors": 0
+    },
+    {
+      "id": 3,
+      "name": "negative_test_nonexistent_source",
+      "command": "POST /api/verified/create-and-export {video_path: /tmp/nonexistent_video_42.mp4}",
+      "http_status": 400,
+      "response_detail": "源视频不存在: /tmp/nonexistent_video_42.mp4",
+      "verified_clips_count_before": 2,
+      "verified_clips_count_after": 2,
+      "result": "PASS"
+    },
+    {
+      "id": 4,
+      "name": "positive_test_real_proxy",
+      "command": "POST /api/verified/create-and-export {video_path: /Volumes/切片/proxy/2025-01-01_大号.mp4, start_sec:100, end_sec:110}",
+      "http_status": 200,
+      "video_path_returned": "exports/roughcuts/skuTEST_POS_clip8_t100_t110.mp4",
+      "is_relative_path": true,
+      "result": "PASS"
+    },
+    {
+      "id": 5,
+      "name": "ffprobe_export_file",
+      "file": "data/exports/roughcuts/skuTEST_POS_clip8_t100_t110.mp4",
+      "duration_sec": 10.009,
+      "size_bytes": 746443,
+      "result": "PASS"
+    },
+    {
+      "id": 6,
+      "name": "old_record_static_access",
+      "url": "/data/exports/roughcuts/sku511181_clip1_t0_t20.mp4",
+      "http_status": 200,
+      "result": "PASS"
+    },
+    {
+      "id": 7,
+      "name": "db_absolute_path_cleanup",
+      "query": "SELECT COUNT(*) FROM verified_clips WHERE video_path LIKE '/%'",
+      "count": 0,
+      "result": "PASS"
+    }
+  ],
+  "files_changed": [
+    "backend/services/ffmpeg_service.py",
+    "backend/routers/verified.py",
+    "frontend/src/api/client.ts",
+    "frontend/src/components/review/AnnotationBar.tsx",
+    "frontend/src/pages/ReviewPage.tsx",
+    "frontend/src/lib/clip-utils.ts",
+    "frontend/src/components/review/VideoPreviewDialog.tsx",
+    "frontend/src/pages/ClipsPage.tsx",
+    "frontend/src/App.tsx",
+    "frontend/src/components/layout/NavBar.tsx"
+  ],
+  "codex_passphrase": "M2-F1F4-GATE-PASS"
+}

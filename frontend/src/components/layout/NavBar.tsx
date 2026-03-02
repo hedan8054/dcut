@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Upload, CalendarDays, ScanSearch, Search, Settings } from 'lucide-react'
+import { Upload, CalendarDays, ScanSearch, Scissors, Search, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 export function NavBar() {
@@ -10,6 +10,7 @@ export function NavBar() {
     { path: '/import', label: '导入', icon: Upload },
     { path: '/plan', label: '选品', icon: CalendarDays },
     { path: '/review', label: '审核', icon: ScanSearch },
+    { path: '/clips', label: '片段', icon: Scissors },
     { path: '/search', label: '检索', icon: Search },
     { path: '/settings', label: '设置', icon: Settings },
   ] as const

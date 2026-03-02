@@ -6,6 +6,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 const ImportPage = React.lazy(() => import('@/pages/ImportPage'))
 const PlanPage = React.lazy(() => import('@/pages/PlanPage'))
 const ReviewPage = React.lazy(() => import('@/pages/ReviewPage'))
+const ClipsPage = React.lazy(() => import('@/pages/ClipsPage'))
 const SearchPage = React.lazy(() => import('@/pages/SearchPage'))
 const SettingsPage = React.lazy(() => import('@/pages/SettingsPage'))
 
@@ -21,6 +22,7 @@ export default function App() {
                 <Route path="/import" element={<ImportPage />} />
                 <Route path="/plan" element={<PlanPage />} />
                 <Route path="/review" element={<ReviewPage />} />
+                <Route path="/clips" element={<ClipsPage />} />
                 <Route path="/search" element={<SearchPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="*" element={<Navigate to="/import" replace />} />

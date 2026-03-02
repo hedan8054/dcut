@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, Loader2, Save, Star, Trash2, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, Download, Loader2, Save, Star, Trash2, X } from 'lucide-react'
+import { createAndExportVerified } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -23,9 +24,10 @@ interface Props {
   }) => Promise<void>
   onDelete: () => Promise<void>
   onClose: () => void
+  onExported?: (clip: import('@/types').VerifiedClip) => void
 }
 
-export function AnnotationBar({ capsule, currentSkuCode, saveRef, onPatch, onDelete, onClose }: Props) {
+export function AnnotationBar({ capsule, currentSkuCode, saveRef, onPatch, onDelete, onClose, onExported }: Props) {
   const [skuCode, setSkuCode] = useState(capsule.sku_code ?? '')
   const [skuLabel, setSkuLabel] = useState(capsule.sku_label ?? '')
   const [rating, setRating] = useState(capsule.rating)
@@ -34,6 +36,7 @@ export function AnnotationBar({ capsule, currentSkuCode, saveRef, onPatch, onDel
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   useEffect(() => {
     setSkuCode(capsule.sku_code ?? currentSkuCode ?? '')
@@ -86,6 +89,26 @@ export function AnnotationBar({ capsule, currentSkuCode, saveRef, onPatch, onDel
       setDeleting(false)
     }
   }, [onDelete])
+
+  const handleExport = useCallback(async () => {
+    if (!effectiveSkuCode) return
+    setExporting(true)
+    try {
+      const clip = await createAndExportVerified({
+        sku_code: effectiveSkuCode,
+        video_path: capsule.video_path,
+        start_sec: capsule.start_sec,
+        end_sec: capsule.end_sec,
+        rating,
+        tags,
+        notes,
+        offset_sec: capsule.start_sec,
+      })
+      onExported?.(clip)
+    } finally {
+      setExporting(false)
+    }
+  }, [capsule, effectiveSkuCode, notes, onExported, rating, tags])
 
   // 暴露 handleSave 给外部（ReviewPage 通过 Enter 键调用）
   useEffect(() => {
@@ -166,9 +189,13 @@ export function AnnotationBar({ capsule, currentSkuCode, saveRef, onPatch, onDel
           {detailsOpen ? '收起详情' : '展开详情'}
         </Button>
 
-        <Button size="sm" onClick={handleSave} disabled={saving || deleting}>
+        <Button size="sm" onClick={handleSave} disabled={saving || deleting || exporting}>
           {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
           保存胶囊
+        </Button>
+        <Button size="sm" variant="secondary" onClick={handleExport} disabled={saving || deleting || exporting || !effectiveSkuCode}>
+          {exporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+          导出粗剪
         </Button>
         <Button variant="outline" size="sm" onClick={handleDelete} disabled={saving || deleting}>
           {deleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}

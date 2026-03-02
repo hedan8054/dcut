@@ -136,6 +136,22 @@ export function deleteVerified(id: number) {
   return request<void>(`/api/verified/${id}`, { method: 'DELETE' })
 }
 
+export function createAndExportVerified(data: {
+  sku_code: string; video_path: string; start_sec: number; end_sec: number;
+  lead_id?: string; raw_video_path?: string; rating?: number; tags?: string[];
+  lead_time_original?: string; offset_sec?: number; notes?: string;
+}) {
+  return request<VerifiedClip>('/api/verified/create-and-export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export function exportVerifiedClip(id: number) {
+  return request<VerifiedClip>(`/api/verified/${id}/export`, { method: 'POST' })
+}
+
 // ---- Review Capsules ----
 
 export function fetchReviewCapsules(videoId?: number, videoPath = '') {
@@ -274,6 +290,109 @@ export function batchFrames(data: {
   })
 }
 
+// ---- Tile 批抽帧 API ----
+
+/** NAS 文件预热 — 消除冷启动首帧尖峰（Codex 方案A） */
+export async function warmVideo(videoId: number): Promise<void> {
+  try {
+    await fetch('/api/video/tiles/warm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ video_id: videoId }),
+    })
+  } catch { /* fire and forget */ }
+}
+
+export function requestTiles(data: {
+  video_id: number
+  start_sec: number
+  end_sec: number
+  interval?: number
+  w?: number
+  h?: number
+  priority?: number
+}, signal?: AbortSignal) {
+  return request<{
+    task_id: string
+    status: string
+    frames: { timestamp: number; url: string }[]
+    frame_count: number
+    elapsed_ms: number
+  }>('/api/video/tiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+    signal,
+  })
+}
+
+/** SSE 流式 Tile 请求 — 每帧就绪时立即回调 */
+export async function requestTileStream(
+  data: {
+    video_id: number
+    start_sec: number
+    end_sec: number
+    interval?: number
+    w?: number
+    h?: number
+    priority?: number
+  },
+  onFrame: (frame: { timestamp: number; url: string }) => void,
+  onComplete?: (info: { frame_count: number; elapsed_ms: number }) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch('/api/video/tiles/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+    signal,
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText)
+    throw new Error(`${res.status}: ${text}`)
+  }
+
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      // 按 SSE 协议解析: 事件块以 \n\n 分隔
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() || ''
+
+      for (const part of parts) {
+        let eventType = ''
+        let eventData = ''
+        for (const line of part.split('\n')) {
+          if (line.startsWith('event: ')) eventType = line.slice(7).trim()
+          else if (line.startsWith('data: ')) eventData = line.slice(6)
+        }
+        if (!eventType || !eventData) continue
+        try {
+          const parsed = JSON.parse(eventData)
+          if (eventType === 'frame') onFrame(parsed)
+          else if (eventType === 'complete') onComplete?.(parsed)
+          else if (eventType === 'error') {
+            throw new Error(parsed.message || 'SSE error from server')
+          }
+        } catch (e) {
+          // JSON 解析失败忽略，真正的 error 事件继续向上抛
+          if (e instanceof SyntaxError) continue
+          throw e
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
 // ---- 视频登记 ----
 
 export function registerVideo(data: {
@@ -300,9 +419,20 @@ export function fetchVideoByDate(date: string) {
 }
 
 export function generateProxy(videoId: number) {
-  return request<{ status: string; proxy_path: string }>(`/api/video/registry/${videoId}/proxy`, {
+  return request<{ status: string; video_id: number }>(`/api/video/registry/${videoId}/proxy`, {
     method: 'POST',
   })
+}
+
+export interface ProxyProgress {
+  phase: string
+  percent: number
+  message: string
+  updated_at: number
+}
+
+export function fetchProxyProgress(videoId: number) {
+  return request<ProxyProgress>(`/api/video/proxy/progress/${videoId}`)
 }
 
 // ---- NAS 视频扫描 ----
@@ -335,12 +465,16 @@ export function populateSegments() {
   )
 }
 
-export function batchGenerateProxy(videoIds: number[] = [], allPending = false) {
+export function batchGenerateProxy(videoIds: number[] = [], allPending = false, includeBadDone = false) {
   return request<{ queued: number; video_ids: number[] }>(
     '/api/video/proxy/batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ video_ids: videoIds, all_pending: allPending }),
+      body: JSON.stringify({
+        video_ids: videoIds,
+        all_pending: allPending,
+        include_bad_done: includeBadDone,
+      }),
     })
 }
 
@@ -354,6 +488,59 @@ export function scanProxyDirectory() {
   return request<{ matched: number; already_done: number; unmatched: string[] }>(
     '/api/video/proxy/scan', { method: 'POST' }
   )
+}
+
+export interface ProxyAuditItem {
+  video_id: number
+  session_date: string
+  session_label: string
+  proxy_path: string
+  ok: boolean
+  reasons: string[]
+  video_duration?: number
+  audio_duration?: number
+  expected_duration?: number
+  audio_video_gap?: number
+}
+
+export function auditProxyHealth(videoIds: number[] = [], limit = 0) {
+  return request<{
+    scanned: number
+    bad_count: number
+    ok_count: number
+    bad_video_ids: number[]
+    bad: ProxyAuditItem[]
+  }>('/api/video/proxy/audit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ video_ids: videoIds, limit }),
+  })
+}
+
+export function recoverBadProxy(options?: {
+  video_ids?: number[]
+  limit?: number
+  dry_run?: boolean
+  enqueue_rebuild?: boolean
+}) {
+  return request<{
+    scanned: number
+    bad_count: number
+    queued: number
+    bad_video_ids: number[]
+    queued_video_ids?: number[]
+    bad?: ProxyAuditItem[]
+    message?: string
+  }>('/api/video/proxy/recover', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      video_ids: options?.video_ids ?? [],
+      limit: options?.limit ?? 0,
+      dry_run: options?.dry_run ?? false,
+      enqueue_rebuild: options?.enqueue_rebuild ?? true,
+    }),
+  })
 }
 
 export function fetchVideoSegments(videoId: number) {

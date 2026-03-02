@@ -8,6 +8,8 @@ import {
   registerVideo,
   fetchSkuImages,
   fetchSkuSessions,
+  updateVerified,
+  deleteVerified,
 } from '@/api/client'
 import { SkuPanel } from '@/components/review/SkuPanel'
 import { SessionTopBar } from '@/components/review/SessionTopBar'
@@ -26,7 +28,7 @@ import { useUiHint } from '@/hooks/use-ui-hint'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Star, ChevronDown, Plus, Loader2, ScanSearch } from 'lucide-react'
+import { Star, ChevronDown, Plus, Loader2, ScanSearch, Play, Download, Trash2 } from 'lucide-react'
 import { formatSec, formatDuration } from '@/lib/format'
 import {
   clampFocusIntoCoarse,
@@ -37,6 +39,8 @@ import {
   rangeSpan,
   type TimeRange,
 } from '@/lib/timeline-range'
+import { hasExportFile, getClipDownloadUrl } from '@/lib/clip-utils'
+import { VideoPreviewDialog } from '@/components/review/VideoPreviewDialog'
 import type {
   Lead,
   VerifiedClip,
@@ -332,8 +336,10 @@ export default function ReviewPage() {
   }, [coarseRange, extendRange, videoId, videoPath])
 
   useEffect(() => {
+    let stale = false
     fetchTodayPlan()
       .then(ep => {
+        if (stale) return
         const items = ep?.items ?? []
         setPlanItems(items)
         // SKU 列表默认展开第一个（或 URL 参数指定的）
@@ -345,11 +351,14 @@ export default function ReviewPage() {
         }
       })
       .catch(console.error)
-      .finally(() => setPlanLoading(false))
+      .finally(() => { if (!stale) setPlanLoading(false) })
+    return () => { stale = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps -- 只在首次加载时执行
 
   useEffect(() => {
-    fetchVideoRegistry().then(setAllVideos).catch(console.error)
+    let stale = false
+    fetchVideoRegistry().then(data => { if (!stale) setAllVideos(data) }).catch(console.error)
+    return () => { stale = true }
   }, [])
 
   const bootstrapRanges = useCallback((anchor: number, duration: number) => {
@@ -411,19 +420,25 @@ export default function ReviewPage() {
       return
     }
 
-    fetchVerified(currentSkuCode).then(setSavedClips).catch(console.error)
-    fetchSkuImages(currentSkuCode).then(setSkuImages).catch(() => setSkuImages([]))
+    // stale 守卫: 快速切换 SKU 时，旧请求回来后不覆盖新 SKU 数据
+    let stale = false
+
+    fetchVerified(currentSkuCode).then(data => { if (!stale) setSavedClips(data) }).catch(console.error)
+    fetchSkuImages(currentSkuCode).then(data => { if (!stale) setSkuImages(data) }).catch(() => { if (!stale) setSkuImages([]) })
 
     setSessionsLoading(true)
     fetchSkuSessions(currentSkuCode)
       .then(data => {
+        if (stale) return
         setSessions(data.sessions)
         const withVideo = data.sessions.find(s => s.video !== null)
         const first = withVideo ?? data.sessions[0]
         if (first) selectSessionRef.current(first)
       })
       .catch(console.error)
-      .finally(() => setSessionsLoading(false))
+      .finally(() => { if (!stale) setSessionsLoading(false) })
+
+    return () => { stale = true }
   }, [
     currentSkuCode,
     setCurrentSession,
@@ -525,6 +540,43 @@ export default function ReviewPage() {
       alert(`登记失败: ${err}`)
     }
   }, [regDate, regPath, regLabel])
+
+  // ---- F2/F4: SavedClipCard handlers ----
+  const [previewClipUrl, setPreviewClipUrl] = useState('')
+
+  const handleClipRatingChange = useCallback(async (clipId: number, newRating: number) => {
+    try {
+      const updated = await updateVerified(clipId, { rating: newRating })
+      setSavedClips(savedClips.map(c => c.id === clipId ? updated : c))
+    } catch (err) {
+      console.error('更新评分失败', err)
+    }
+  }, [savedClips, setSavedClips])
+
+  const handleClipDelete = useCallback(async (clipId: number) => {
+    try {
+      await deleteVerified(clipId)
+      setSavedClips(savedClips.filter(c => c.id !== clipId))
+    } catch (err) {
+      console.error('删除片段失败', err)
+    }
+  }, [savedClips, setSavedClips])
+
+  const handleClipDownload = useCallback((clip: VerifiedClip) => {
+    if (!hasExportFile(clip)) return
+    const url = getClipDownloadUrl(clip)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = url.split('/').pop() || 'clip.mp4'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }, [])
+
+  const handleClipPlay = useCallback((clip: VerifiedClip) => {
+    if (!hasExportFile(clip)) return
+    setPreviewClipUrl(getClipDownloadUrl(clip))
+  }, [])
 
   // Enter 保存: AnnotationBar 通过 saveRef 暴露 handleSave
   const annotationSaveRef = useRef<(() => Promise<void>) | null>(null)
@@ -907,6 +959,7 @@ export default function ReviewPage() {
             onPatch={handlePatchActiveCapsule}
             onDelete={handleDeleteActiveCapsule}
             onClose={() => setMode('browse')}
+            onExported={(clip) => { setSavedClips([clip, ...savedClips]); showUiHint('粗剪已导出') }}
           />
         )}
 
@@ -917,7 +970,14 @@ export default function ReviewPage() {
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {savedClips.map((clip) => (
-                <SavedClipCard key={clip.id} clip={clip} />
+                <SavedClipCard
+                  key={clip.id}
+                  clip={clip}
+                  onRatingChange={handleClipRatingChange}
+                  onDelete={handleClipDelete}
+                  onPlay={handleClipPlay}
+                  onDownload={handleClipDownload}
+                />
               ))}
             </div>
           </div>
@@ -949,15 +1009,54 @@ export default function ReviewPage() {
           </div>
         </div>
       )}
+
+      <VideoPreviewDialog
+        open={!!previewClipUrl}
+        onOpenChange={(open) => { if (!open) setPreviewClipUrl('') }}
+        videoUrl={previewClipUrl}
+      />
     </div>
   )
 }
 
-function SavedClipCard({ clip }: { clip: VerifiedClip }) {
+function SavedClipCard({ clip, onRatingChange, onDelete, onPlay, onDownload }: {
+  clip: VerifiedClip
+  onRatingChange?: (clipId: number, rating: number) => void
+  onDelete?: (clipId: number) => void
+  onPlay?: (clip: VerifiedClip) => void
+  onDownload?: (clip: VerifiedClip) => void
+}) {
+  const [hovered, setHovered] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const exported = hasExportFile(clip)
+
   return (
-    <div className="shrink-0 w-36 rounded border bg-card text-xs overflow-hidden">
+    <div
+      className="shrink-0 w-36 rounded border bg-card text-xs overflow-hidden relative"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => { setHovered(false); setConfirmDelete(false) }}
+    >
       {clip.thumbnail && (
-        <img src={`/data/${clip.thumbnail}`} className="w-full aspect-[9/16] object-cover" loading="lazy" />
+        <div className="relative">
+          <img src={`/data/${clip.thumbnail}`} className="w-full aspect-[9/16] object-cover" loading="lazy" />
+          {hovered && (
+            <div className="absolute inset-0 bg-black/50 flex items-center justify-center gap-2">
+              {exported && (
+                <>
+                  <button onClick={() => onPlay?.(clip)} className="p-1.5 rounded-full bg-white/20 hover:bg-white/40" title="预览">
+                    <Play className="w-4 h-4 text-white" />
+                  </button>
+                  <button onClick={() => onDownload?.(clip)} className="p-1.5 rounded-full bg-white/20 hover:bg-white/40" title="下载">
+                    <Download className="w-4 h-4 text-white" />
+                  </button>
+                </>
+              )}
+              <button onClick={() => setConfirmDelete(true)} className="p-1.5 rounded-full bg-white/20 hover:bg-red-500/60" title="删除">
+                <Trash2 className="w-4 h-4 text-white" />
+              </button>
+            </div>
+          )}
+        </div>
       )}
       <div className="p-2 space-y-1">
         <div className="flex items-center gap-1">
@@ -970,11 +1069,21 @@ function SavedClipCard({ clip }: { clip: VerifiedClip }) {
           {[1, 2, 3, 4, 5].map((n) => (
             <Star
               key={n}
-              className={`w-3 h-3 ${n <= clip.rating ? 'fill-yellow-500 text-yellow-500' : 'text-muted-foreground'}`}
+              className={`w-3 h-3 cursor-pointer ${n <= clip.rating ? 'fill-yellow-500 text-yellow-500' : 'text-muted-foreground hover:text-yellow-400'}`}
+              onClick={() => onRatingChange?.(clip.id, n === clip.rating ? 0 : n)}
             />
           ))}
         </div>
       </div>
+      {confirmDelete && (
+        <div className="absolute inset-x-0 bottom-0 bg-red-950/90 p-2 flex items-center justify-between text-[11px]">
+          <span className="text-red-200">确认删除？</span>
+          <div className="flex gap-1">
+            <button onClick={() => setConfirmDelete(false)} className="px-2 py-0.5 rounded bg-white/10 text-white hover:bg-white/20">取消</button>
+            <button onClick={() => onDelete?.(clip.id)} className="px-2 py-0.5 rounded bg-red-600 text-white hover:bg-red-500">删除</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
